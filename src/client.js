@@ -205,8 +205,13 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
   const FIELD_TO_YAML = {};
   for (const f of FIELDS) if (f.yaml) FIELD_TO_YAML[f.key] = f.yaml;
 
-  // mnemosyne upstream defaults for placeholder display (camelCase → value)
+  // Upstream defaults for placeholder display (camelCase → value).
+  // Empty-string defaults show "default" in the placeholder.
   const FIELD_DEFAULTS = {
+    cli: "mnemosyne",
+    defaultTopK: 5,
+    timeoutMs: 20000,
+    dataDir: "~/.dsh/mnemosyne",
     noEmbeddings: false,
     embeddingModel: "BAAI/bge-small-en-v1.5",
     embeddingDim: 384,
@@ -367,9 +372,11 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       return v === undefined ? "" : v;
     };
     // Placeholder text showing the default value for non-toggle fields.
+    // Fields whose upstream default is empty show "default" as a hint.
     const placeholder = (key) => {
       const def = FIELD_DEFAULTS[key];
-      if (def === undefined || def === "") return "";
+      if (def === undefined) return "default";
+      if (def === "") return "default";
       return String(def);
     };
     const isDirty = Object.keys(drafts).length > 0;
