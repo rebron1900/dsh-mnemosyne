@@ -216,8 +216,11 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-field-right{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}' +
     '.mn-field-head{align-items:center;gap:8px;display:flex}' +
     '.mn-label{min-width:0;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}' +
-    '.mn-help{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--dsw-alias-label-dimmed);color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:600;line-height:1;cursor:help;flex:none;user-select:none}' +
+    '.mn-help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--dsw-alias-label-dimmed);color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:600;line-height:1;cursor:help;flex:none;user-select:none}' +
     '.mn-help:hover,.mn-help:focus-visible{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);outline:none}' +
+    '.mn-tooltip{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);width:max-content;max-width:340px;padding:8px 12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;font-size:12px;font-weight:400;line-height:1.6;white-space:normal;opacity:0;pointer-events:none;transition:opacity .15s;z-index:30;box-shadow:0 4px 12px #00000033}' +
+    '.mn-tooltip::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--dsw-alias-border-l2)}' +
+    '.mn-help:hover .mn-tooltip,.mn-help:focus-visible .mn-tooltip{opacity:1}' +
     '.mn-toggle{display:flex;align-items:center;gap:10px;width:100%;padding-top:6px}' +
     '.mn-check{width:16px;height:16px;accent-color:var(--dsw-alias-brand-primary);cursor:pointer;margin:0}' +
     '.mn-input{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);min-height:34px;font:inherit;color:var(--dsw-alias-label-primary);border-radius:8px;padding:6px 12px;font-size:13px;line-height:1.5;width:100%;box-sizing:border-box;max-width:420px}' +
@@ -397,9 +400,12 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const renderField = (f) => {
       const val = format(f.key);
       const isOverridden = f.key in drafts;
-      // Tooltip icon: ? with hover text for the field hint
+      // Tooltip icon: ? with hover tooltip for the field hint
       const hintIcon = f.hint
-        ? h("span", { className: "mn-help", title: t(f.hint), tabIndex: 0 }, "?")
+        ? h("span", { className: "mn-help", tabIndex: 0 },
+            "?",
+            h("span", { className: "mn-tooltip" }, t(f.hint)),
+          )
         : null;
       // Toggle: label on left, checkbox on right — same row
       if (f.type === "toggle") {
