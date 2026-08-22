@@ -218,8 +218,8 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-label{min-width:0;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}' +
     '.mn-help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--dsw-alias-label-dimmed);color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:600;line-height:1;cursor:help;flex:none;user-select:none}' +
     '.mn-help:hover,.mn-help:focus-visible{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);outline:none}' +
-    '.mn-tooltip{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);width:max-content;max-width:340px;padding:8px 12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;font-size:12px;font-weight:400;line-height:1.6;white-space:normal;opacity:0;pointer-events:none;transition:opacity .15s;z-index:30;box-shadow:0 4px 12px #00000033}' +
-    '.mn-tooltip::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--dsw-alias-border-l2)}' +
+    '.mn-tooltip{position:absolute;bottom:calc(100% + 8px);left:0;width:max-content;max-width:min(340px,calc(100vw - 48px));padding:8px 12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;font-size:12px;font-weight:400;line-height:1.6;white-space:normal;opacity:0;pointer-events:none;transition:opacity .15s;z-index:30;box-shadow:0 4px 12px #00000033}' +
+    '.mn-tooltip::after{content:"";position:absolute;top:100%;left:7px;border:5px solid transparent;border-top-color:var(--dsw-alias-border-l2)}' +
     '.mn-help:hover .mn-tooltip,.mn-help:focus-visible .mn-tooltip{opacity:1}' +
     '.mn-toggle{display:flex;align-items:center;gap:10px;width:100%;padding-top:6px}' +
     '.mn-check{width:16px;height:16px;accent-color:var(--dsw-alias-brand-primary);cursor:pointer;margin:0}' +
