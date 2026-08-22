@@ -86,6 +86,8 @@ describe("plugin apply()", () => {
     assert.equal(skills[0].name, "mnemosyne");
     assert.match(skills[0].name, /^[a-z0-9][a-z0-9-]*$/);
     assert.ok(skills[0].description.length > 0);
+    assert.equal(typeof skills[0].source, "string");
+    assert.equal(skills[0].source, "dsh-mnemosyne");
     assert.ok(skills[0].content.includes("mnemosyne_recall"));
   });
 

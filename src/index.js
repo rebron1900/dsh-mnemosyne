@@ -648,6 +648,7 @@ export function apply(ctx, config) {
 
 export const SKILL = {
   name: "mnemosyne",
+  source: "dsh-mnemosyne",
   description:
     "Persist and recall memories across DSH sessions using Mnemosyne, a local-first SQLite-backed memory layer. Use when the user reveals preferences, constraints, or project facts that should survive sessions, or when starting work on a topic where prior context may help.",
   whenToUse:
