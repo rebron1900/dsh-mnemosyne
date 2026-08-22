@@ -183,7 +183,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     { group: "groupPlugin", key: "cli", type: "text", label: "f_cli", hint: "f_cli_hint" },
     { group: "groupPlugin", key: "defaultTopK", type: "number", label: "f_defaultTopK", hint: "f_defaultTopK_hint" },
     { group: "groupPlugin", key: "timeoutMs", type: "number", label: "f_timeoutMs", hint: "f_timeoutMs_hint" },
-    { group: "groupPlugin", key: "dataDir", type: "text", label: "f_dataDir", hint: "f_dataDir_hint", yaml: "data_dir" },
+    { group: "groupPlugin", key: "dataDir", type: "text", label: "f_dataDir", hint: "f_dataDir_hint" },
     { group: "groupEmbedding", key: "noEmbeddings", type: "toggle", label: "f_noEmbeddings", hint: "f_noEmbeddings_hint", yaml: "no_embeddings" },
     { group: "groupEmbedding", key: "embeddingModel", type: "text", label: "f_embeddingModel", hint: "f_embeddingModel_hint", yaml: "embedding_model" },
     { group: "groupEmbedding", key: "embeddingDim", type: "number", label: "f_embeddingDim", hint: "f_embeddingDim_hint", yaml: "embedding_dim" },
@@ -333,7 +333,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         const r = await fetch("/mnemosyne/setup", { method: "POST" });
         const data = await r.json();
         setMsg(data.ok ? t("setupDone") : t("setupFail") + ": " + (data.error || ""));
-        if (data.ok) refresh();
+        if (data.ok) await refresh(); // keep busy until the refresh settles
       } catch (e) { setMsg(t("setupFail") + ": " + String(e?.message ?? e)); }
       finally { setBusy(null); }
     };
@@ -414,11 +414,12 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       // Save config.yaml keys via HTTP route
       if (Object.keys(yamlPayload).length > 0) {
         try {
-          await fetch("/mnemosyne/config", {
+          const r = await fetch("/mnemosyne/config", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(yamlPayload),
           });
+          if (!r.ok) throw new Error("HTTP " + r.status);
           // Refresh yaml config after write
           const cfgRes = await fetch("/mnemosyne/config").then((r) => r.json()).catch(() => ({ ok: false }));
           if (cfgRes.ok && cfgRes.config) setYamlConfig(cfgRes.config);
@@ -430,6 +431,13 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     };
 
     const resetField = async (key) => {
+      const f = FIELDS.find((x) => x.key === key);
+      if (f && f.yaml) {
+        // config.yaml fields have no per-field reset on the host — discarding
+        // the draft restores the displayed server value.
+        setDrafts((d) => { const n = { ...d }; delete n[key]; return n; });
+        return;
+      }
       if (!scope || typeof scope.set !== "function") return;
       try { await scope.set(key, undefined); setDrafts((d) => { const n = { ...d }; delete n[key]; return n; }); }
       catch { setFailedFields([key]); }
@@ -438,7 +446,8 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const resetAll = async () => {
       setSaving(true); setFailedFields([]);
       try {
-        await fetch("/mnemosyne/config", { method: "DELETE" });
+        const r = await fetch("/mnemosyne/config", { method: "DELETE" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
         const cfgRes = await fetch("/mnemosyne/config").then((r) => r.json()).catch(() => ({ ok: false }));
         if (cfgRes.ok && cfgRes.config) setYamlConfig(cfgRes.config);
         setDrafts({});
@@ -461,11 +470,14 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const renderField = (f) => {
       const val = format(f.key);
       const isOverridden = f.key in drafts;
-      // Tooltip icon: ? with hover tooltip for the field hint
+      const inputId = "mn-" + f.key;
+      const hintId = f.hint ? "mn-hint-" + f.key : undefined;
+      // Tooltip icon: ? with hover tooltip for the field hint. The tooltip
+      // node doubles as the aria-describedby target for screen readers.
       const hintIcon = f.hint
-        ? h("span", { className: "mn-help", tabIndex: 0 },
+        ? h("span", { className: "mn-help", tabIndex: 0, "aria-label": t(f.label) + " — " + t(f.hint) },
             "?",
-            h("span", { className: "mn-tooltip" }, t(f.hint)),
+            h("span", { className: "mn-tooltip", id: hintId, role: "note" }, t(f.hint)),
           )
         : null;
       // Toggle: label on left, checkbox on right — same row
@@ -473,28 +485,30 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         return h("div", { className: "mn-field", key: f.key },
           h("div", { className: "mn-field-left" },
             h("div", { className: "mn-field-head" },
-              h("span", { className: "mn-label" }, t(f.label)),
+              h("label", { className: "mn-label", htmlFor: inputId }, t(f.label)),
               hintIcon,
               isOverridden ? h("button", { type: "button", className: "mn-btn", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => resetField(f.key) }, t("reset")) : null,
             ),
           ),
           h("div", { className: "mn-field-right", style: { paddingTop: 8 } },
-            h("input", { type: "checkbox", className: "mn-check", checked: val === true, onChange: (e) => setDraft(f.key, e.target.checked) }),
+            h("input", { type: "checkbox", id: inputId, className: "mn-check", checked: val === true, onChange: (e) => setDraft(f.key, e.target.checked) }),
           ),
         );
       }
       const inputType = f.type === "number" ? "number" : f.secret ? "password" : "text";
       const inputProps = {
+        id: inputId,
         className: "mn-input" + (f.type === "area" ? " mn-area" : ""),
         value: val,
         placeholder: placeholder(f.key) || undefined,
+        "aria-describedby": hintId,
         onChange: (e) => setDraft(f.key, f.type === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value),
       };
       if (f.type === "area") inputProps.rows = 3;
       return h("div", { className: "mn-field", key: f.key },
         h("div", { className: "mn-field-left" },
           h("div", { className: "mn-field-head" },
-            h("span", { className: "mn-label" }, t(f.label)),
+            h("label", { className: "mn-label", htmlFor: inputId }, t(f.label)),
             hintIcon,
             isOverridden ? h("button", { type: "button", className: "mn-btn", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => resetField(f.key) }, t("reset")) : null,
           ),
@@ -543,7 +557,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           h("button", { type: "button", className: "mn-btn", disabled: !!busy || !diag?.cliReady, onClick: test }, busy === "test" ? t("testing") : t("test")),
           h("button", { type: "button", className: "mn-btn", disabled: !!busy, onClick: refresh }, t("refresh")),
         ),
-        msg ? h("div", { className: "mn-msg" }, msg) : null,
+        msg ? h("div", { className: "mn-msg", role: "status" }, msg) : null,
       ]),
       // Save bar (between status and config cards, shown when dirty)
       isDirty ? h("li", { className: "mn-card mn-card-open", key: "savebar" },

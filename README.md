@@ -29,8 +29,7 @@ dsh plugin --profile web add dsh-mnemosyne
 
 | 分组 | 字段 | 配置来源 |
 |------|------|----------|
-| 插件 | `cli` / `defaultTopK` / `timeoutMs` | DSH settings / `cordis.patch.yml` |
-| 插件 | `dataDir` | config.yaml `data_dir`，默认 `~/.dsh/mnemosyne` |
+| 插件 | `cli` / `defaultTopK` / `timeoutMs` / `dataDir` | DSH settings / `cordis.patch.yml` |
 | Embedding | `noEmbeddings` / `embeddingModel` / `embeddingDim` / `embeddingApiUrl` / `embeddingApiKey` | config.yaml `no_embeddings` / `embedding_*` |
 | LLM | `llmEnabled` / `llmBaseUrl` / `llmApiKey` / `llmModel` / `llmTimeout` | config.yaml `llm_*` |
 | 召回 | `polyphonicRecall` | config.yaml `polyphonic_recall` |

@@ -233,7 +233,7 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 | `polyphonicRecall` | `MNEMOSYNE_POLYPHONIC_RECALL` |
 | `wmMaxItems`/`wmTtlHours` | `MNEMOSYNE_WM_*` |
 
-面板字段对应 config.yaml 的扁平顶层键：`dataDir`→`data_dir`、`noEmbeddings`→`no_embeddings`、`embeddingModel`→`embedding_model`、`embeddingDim`→`embedding_dim`、`embeddingApiUrl`→`embedding_api_url`、`embeddingApiKey`→`embedding_api_key`、`llmEnabled`→`llm_enabled`、`llmBaseUrl`→`llm_base_url`、`llmApiKey`→`llm_api_key`、`llmModel`→`llm_model`、`llmTimeout`→`llm_timeout`、`polyphonicRecall`→`polyphonic_recall`、`wmMaxItems`→`wm_max_items`、`wmTtlHours`→`wm_ttl_hours`、`autoSleep`→`auto_sleep_enabled`、`sleepThreshold`→`sleep_threshold`、`ignorePatterns`→`ignore_patterns`。`cli`、`defaultTopK`、`timeoutMs` 是 DSH 专用设置。
+面板字段对应 config.yaml 的扁平顶层键：`noEmbeddings`→`no_embeddings`、`embeddingModel`→`embedding_model`、`embeddingDim`→`embedding_dim`、`embeddingApiUrl`→`embedding_api_url`、`embeddingApiKey`→`embedding_api_key`、`llmEnabled`→`llm_enabled`、`llmBaseUrl`→`llm_base_url`、`llmApiKey`→`llm_api_key`、`llmModel`→`llm_model`、`llmTimeout`→`llm_timeout`、`polyphonicRecall`→`polyphonic_recall`、`wmMaxItems`→`wm_max_items`、`wmTtlHours`→`wm_ttl_hours`、`autoSleep`→`auto_sleep_enabled`、`sleepThreshold`→`sleep_threshold`、`ignorePatterns`→`ignore_patterns`。`cli`、`defaultTopK`、`timeoutMs`、`dataDir` 是 DSH 专用设置（运行时目录以 DSH settings 的 `dataDir` 为唯一事实源，config.yaml 不再写 `data_dir`）。
 
 `readMnemosyneConfigYaml()` 解析扁平 YAML 标量并恢复字符串、数字、布尔值和 null 类型；`ensureConfigDefaults()` 在 setup/diagnose 时只为缺失或空值补写 mnemosyne 默认值，不覆盖用户已有值。
 

@@ -1,16 +1,25 @@
-import { describe, it, mock } from "node:test";
+import { describe, it, mock, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { homedir } from "node:os";
+import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import {
   apply,
   buildEnv,
   DEFAULT_DATA_DIR,
   recallArgs,
+  readMnemosyneConfigYaml,
+  resolveCli,
   runMnemosyne,
+  setupMnemosyne,
   SKILL,
   storeArgs,
+  writeMnemosyneConfigYaml,
 } from "../src/index.js";
 
 /** Minimal cordis-style ctx: runs inject callbacks immediately, collects registrations. */
@@ -162,5 +171,160 @@ describe("buildEnv", () => {
   it("sets NO_EMBEDDINGS only when explicitly true", () => {
     assert.equal(buildEnv({ noEmbeddings: true }, {}).MNEMOSYNE_NO_EMBEDDINGS, "1");
     assert.equal(buildEnv({ noEmbeddings: false }, {}).MNEMOSYNE_NO_EMBEDDINGS, undefined);
+  });
+
+  it("expands ~ in dataDir to the real home directory", () => {
+    const env = buildEnv({ dataDir: "~/.dsh/mnemosyne" }, {});
+    assert.equal(env.MNEMOSYNE_DATA_DIR, join(homedir(), ".dsh", "mnemosyne"));
+  });
+});
+
+describe("config.yaml write guard", () => {
+  let dir;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "dsh-mnem-cfg-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("writes strings quoted and round-trips them", () => {
+    const value = 'safe "quote" and # hash';
+    writeMnemosyneConfigYaml(dir, { llm_model: value });
+    const raw = readFileSync(join(dir, "config.yaml"), "utf8");
+    // JSON-quoted form escapes inner quotes; the parser unescapes on read.
+    assert.ok(raw.includes('llm_model: "safe \\"quote\\" and # hash"'));
+  });
+
+  it("rejects unknown keys without touching the file", () => {
+    assert.throws(
+      () => writeMnemosyneConfigYaml(dir, { evil_key: "x" }),
+      /unsupported configuration key/
+    );
+    assert.equal(existsSync(join(dir, "config.yaml")), false);
+  });
+
+  it("safely writes and round-trips multiline strings", () => {
+    const value = "line1\nline2\nfake_key: true";
+    writeMnemosyneConfigYaml(dir, { ignore_patterns: value });
+    const raw = readFileSync(join(dir, "config.yaml"), "utf8");
+    // The newline is JSON-escaped — no extra YAML key line is produced.
+    assert.ok(!raw.includes("\nfake_key: true"));
+    // Read back returns the original multiline value.
+    const cfg = readMnemosyneConfigYaml(dir);
+    assert.equal(cfg.ignore_patterns, value);
+  });
+
+  it("rejects wrong value types", () => {
+    assert.throws(() => writeMnemosyneConfigYaml(dir, { llm_timeout: "60" }), /invalid value/);
+    assert.throws(() => writeMnemosyneConfigYaml(dir, { no_embeddings: "yes" }), /invalid value/);
+    assert.throws(() => writeMnemosyneConfigYaml(dir, { sleep_threshold: -1 }), /non-negative/);
+  });
+
+  it("accepts empty string as a cleared value", () => {
+    writeMnemosyneConfigYaml(dir, { embedding_model: "" });
+    const raw = readFileSync(join(dir, "config.yaml"), "utf8");
+    assert.ok(raw.includes('embedding_model: ""'));
+  });
+});
+
+const hasCli = Boolean(resolveCli("mnemosyne"));
+
+describe("setupMnemosyne", { skip: !hasCli }, () => {
+  it("fills config defaults into the configured dataDir", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dsh-mnem-setup-"));
+    try {
+      const result = await setupMnemosyne({ dataDir: dir });
+      assert.ok(result.ok);
+      assert.ok(existsSync(join(dir, "config.yaml")));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("panel HTTP routes", () => {
+  let dir;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "dsh-mnem-route-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  function createRouteCtx(config) {
+    let handler = null;
+    const ctx = {
+      get: (key) => (key === "skills" ? { register: () => {} } : undefined),
+      effect: (fn) => fn(),
+      on: () => () => {},
+      inject: (deps, fn) => {
+        if (deps[0] === "tools") {
+          fn({ effect: (fn) => fn(), tools: { register: () => () => {} } });
+        } else if (deps[0] === "webServer") {
+          fn({
+            webServer: { register: (def) => { if (def.path === "/mnemosyne/config") handler = def.handler; return () => {}; } },
+            effect: (fn) => fn(),
+          });
+        } else if (deps[0] === "settings") {
+          fn({ settings: { register: () => ({}) }, effect: (fn) => fn() });
+        }
+      },
+    };
+    apply(ctx, config);
+    return handler;
+  }
+
+  function jsonReq(method, body, headers = {}) {
+    const req = new EventEmitter();
+    req.method = method;
+    req.headers = { host: "127.0.0.1:6769", origin: "http://127.0.0.1:6769", ...headers };
+    req.socket = {};
+    if (body !== undefined) {
+      process.nextTick(() => {
+        req.emit("data", Buffer.from(JSON.stringify(body)));
+        req.emit("end");
+      });
+    }
+    return req;
+  }
+
+  function callRoute(handler, req) {
+    return new Promise((resolve) => {
+      const res = {
+        status: null,
+        writeHead(code) { this.status = code; },
+        end(payload) { resolve({ status: this.status, body: payload ? JSON.parse(payload) : null }); },
+      };
+      handler(req, res);
+    });
+  }
+
+  it("POST rejects requests without a trusted origin", async () => {
+    const handler = createRouteCtx({ dataDir: dir });
+    const res = await callRoute(handler, jsonReq("POST", { llm_model: "x" }, { origin: undefined }));
+    assert.equal(res.status, 403);
+  });
+
+  it("POST writes whitelisted keys through the full route", async () => {
+    const handler = createRouteCtx({ dataDir: dir });
+    const res = await callRoute(handler, jsonReq("POST", { llm_model: "route-test" }));
+    assert.equal(res.status, 200);
+    assert.ok(res.body.ok);
+    const raw = readFileSync(join(dir, "config.yaml"), "utf8");
+    assert.ok(raw.includes('llm_model: "route-test"'));
+  });
+
+  it("POST returns 400 for keys outside the panel whitelist", async () => {
+    const handler = createRouteCtx({ dataDir: dir });
+    const res = await callRoute(handler, jsonReq("POST", { not_a_panel_key: "x" }));
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /unsupported configuration key/);
+  });
+
+  it("GET blocks cross-site reads via Sec-Fetch-Site", async () => {
+    const handler = createRouteCtx({ dataDir: dir });
+    const res = await callRoute(handler, jsonReq("GET", undefined, { "sec-fetch-site": "cross-site" }));
+    assert.equal(res.status, 403);
+  });
+
+  it("GET merges upstream defaults under stored values", async () => {
+    const handler = createRouteCtx({ dataDir: dir });
+    const res = await callRoute(handler, jsonReq("GET"));
+    assert.equal(res.status, 200);
+    assert.equal(res.body.config.embedding_dim, 384);
+    assert.equal(res.body.config.sleep_threshold, 20);
   });
 });

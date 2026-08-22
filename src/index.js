@@ -13,13 +13,20 @@ function sendJson(res, status, body) {
 }
 function sameOrigin(req) {
   const origin = req.headers.origin;
-  if (!origin) return true; // same-origin browser navigations omit Origin
+  if (!origin || !req.headers.host) return false;
   try {
     const u = new URL(origin);
-    return u.host === req.headers.host;
+    const protocol = req.socket?.encrypted ? "https:" : "http:";
+    return u.protocol === protocol && u.host === req.headers.host;
   } catch {
     return false;
   }
+}
+// Same-origin GET fetches may omit Origin; use Sec-Fetch-Site when the browser
+// provides it to block cross-site reads without breaking the panel's refresh.
+function trustedRead(req) {
+  const site = req.headers["sec-fetch-site"];
+  return site === undefined || site === "same-origin";
 }
 function readJsonBody(req, limit = 1 << 20) {
   return new Promise((resolve, reject) => {
@@ -52,6 +59,56 @@ export const name = "mnemosyne";
 export const inject = ["tools"];
 
 export const DEFAULT_DATA_DIR = join(homedir(), ".dsh", "mnemosyne");
+
+function expandPath(value) {
+  const path = String(value ?? DEFAULT_DATA_DIR);
+  return resolvePath(path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path);
+}
+
+const CONFIG_VALUE_TYPES = {
+  no_embeddings: "boolean",
+  embedding_model: "string",
+  embedding_dim: "number",
+  embedding_api_url: "string",
+  embedding_api_key: "string",
+  llm_enabled: "boolean",
+  llm_base_url: "string",
+  llm_api_key: "string",
+  llm_model: "string",
+  llm_timeout: "number",
+  polyphonic_recall: "boolean",
+  wm_max_items: "number",
+  wm_ttl_hours: "number",
+  auto_sleep_enabled: "boolean",
+  sleep_threshold: "number",
+  ignore_patterns: "string",
+};
+
+export class ConfigValidationError extends Error {}
+
+function validateConfigValues(values) {
+  if (!values || typeof values !== "object" || Array.isArray(values)) throw new ConfigValidationError("configuration must be an object");
+  const result = {};
+  for (const [key, value] of Object.entries(values)) {
+    const type = CONFIG_VALUE_TYPES[key];
+    if (!type) throw new ConfigValidationError(`unsupported configuration key: ${key}`);
+    // Empty string = "cleared, fall back to upstream default" (panel clears
+    // number inputs to ""). Anything else must match the field type.
+    if (value !== "") {
+      if (typeof value !== type || (type === "number" && !Number.isFinite(value))) {
+        throw new ConfigValidationError(`invalid value for configuration key: ${key}`);
+      }
+      if (type === "number" && value < 0) throw new ConfigValidationError(`configuration key must be non-negative: ${key}`);
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+function yamlScalar(value) {
+  if (typeof value === "string") return JSON.stringify(value);
+  return String(value);
+}
 
 export const Config = z.object({
   // --- plugin behaviour ---
@@ -94,7 +151,7 @@ export function buildEnv(config, base = process.env) {
   const c = config ?? {};
   const env = { ...base };
   // data dir is always pinned to the plugin's contract (~/.dsh/mnemosyne)
-  env.MNEMOSYNE_DATA_DIR = c.dataDir ?? DEFAULT_DATA_DIR;
+  env.MNEMOSYNE_DATA_DIR = expandPath(c.dataDir);
   if (c.noEmbeddings) env.MNEMOSYNE_NO_EMBEDDINGS = "1";
   if (c.embeddingModel) env.MNEMOSYNE_EMBEDDING_MODEL = c.embeddingModel;
   if (c.embeddingDim != null) env.MNEMOSYNE_EMBEDDING_DIM = String(c.embeddingDim);
@@ -117,7 +174,7 @@ export function runMnemosyne(cli, command, args, timeoutMs, env) {
     execFile(
       cli,
       [command, ...args],
-      { timeout: timeoutMs, windowsHide: true, env: env ?? process.env },
+      { timeout: timeoutMs, windowsHide: true, env: env ?? process.env, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
           if (error.code === "ENOENT") {
@@ -194,11 +251,13 @@ function resolveUv() {
 }
 
 /** Install the mnemosyne CLI via `uv tool install`. Returns a status object. */
-export async function setupMnemosyne() {
-  const existing = resolveCli("mnemosyne");
+export async function setupMnemosyne(config = {}) {
+  const cliName = config.cli ?? "mnemosyne";
+  const dataDir = expandPath(config.dataDir);
+  const existing = resolveCli(cliName);
   if (existing) {
     // Even if already installed, ensure config.yaml has defaults filled
-    ensureConfigDefaults(DEFAULT_DATA_DIR);
+    ensureConfigDefaults(dataDir);
     return { ok: true, alreadyInstalled: true, path: existing };
   }
   const uv = resolveUv();
@@ -210,9 +269,9 @@ export async function setupMnemosyne() {
   }
   try {
     const stdout = await runExec(uv, ["tool", "install", "mnemosyne-memory"], 180_000);
-    const path = resolveCli("mnemosyne");
+    const path = resolveCli(cliName);
     // Fill in mnemosyne upstream defaults in config.yaml right after install
-    if (path) ensureConfigDefaults(DEFAULT_DATA_DIR);
+    if (path) ensureConfigDefaults(dataDir);
     return { ok: true, alreadyInstalled: false, path, output: stdout };
   } catch (e) {
     return { ok: false, error: String(e?.message ?? e) };
@@ -232,7 +291,7 @@ function runExec(file, args, timeoutMs) {
 export async function diagnoseMnemosyne(config) {
   const c = config ?? {};
   const cli = resolveCli(c.cli ?? "mnemosyne");
-  const dataDir = c.dataDir ?? DEFAULT_DATA_DIR;
+  const dataDir = expandPath(c.dataDir);
   if (!cli) return { ok: false, cliReady: false, error: "mnemosyne CLI not on PATH" };
   try {
     mkdirSync(dataDir, { recursive: true });
@@ -242,7 +301,7 @@ export async function diagnoseMnemosyne(config) {
     // values instead of blanks.
     ensureConfigDefaults(dataDir);
     const env = buildEnv(c);
-    const stats = await runMnemosyne(cli, "stats", [], c.timeoutMs ?? 20_000, env);
+    const stats = await runMnemosyne(cli, "stats", [], Math.max(1_000, Number(c.timeoutMs) || 20_000), env);
     return { ok: true, cliReady: true, path: cli, dataDir, stats };
   } catch (e) {
     return { ok: false, cliReady: true, path: cli, dataDir, error: String(e?.message ?? e) };
@@ -260,7 +319,6 @@ const TEXT_OUTPUT = {
 
 /** mnemosyne upstream defaults for panel-managed config.yaml keys. */
 const MNEMOSYNE_YAML_DEFAULTS = {
-  data_dir: "",
   no_embeddings: false,
   embedding_model: "BAAI/bge-small-en-v1.5",
   embedding_dim: 384,
@@ -281,7 +339,6 @@ const MNEMOSYNE_YAML_DEFAULTS = {
 
 /** Panel camelCase → config.yaml snake_case mapping. */
 export const CONFIG_YAML_MAP = {
-  dataDir: "data_dir",
   noEmbeddings: "no_embeddings",
   embeddingModel: "embedding_model",
   embeddingDim: "embedding_dim",
@@ -304,8 +361,10 @@ export const CONFIG_YAML_MAP = {
 function parseYamlScalar(raw) {
   const s = raw.trim();
   if (s === "") return "";
-  // Double-quoted
-  if (s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1).replace(/\\"/g, '"');
+  // Double-quoted — written by yamlScalar() as JSON.stringify, so decode with JSON.parse.
+  if (s.startsWith('"') && s.endsWith('"')) {
+    try { return JSON.parse(s); } catch { return s.slice(1, -1); }
+  }
   // Single-quoted (YAML: '' = escaped single quote)
   if (s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1).replace(/''/g, "'");
   // Boolean
@@ -322,7 +381,7 @@ function parseYamlScalar(raw) {
 
 /** Parse a flat `key: value` YAML file into { key: value } object with typed values. */
 export function readMnemosyneConfigYaml(dataDir) {
-  const p = join(dataDir, "config.yaml");
+  const p = join(expandPath(dataDir), "config.yaml");
   if (!existsSync(p)) return {};
   const raw = readFileSync(p, "utf8");
   const result = {};
@@ -336,11 +395,13 @@ export function readMnemosyneConfigYaml(dataDir) {
 
 /** Update specific top-level keys in a flat config.yaml (merge, preserves others). */
 export function writeMnemosyneConfigYaml(dataDir, values) {
-  const p = join(dataDir, "config.yaml");
-  mkdirSync(dataDir, { recursive: true });
+  const dir = expandPath(dataDir);
+  const p = join(dir, "config.yaml");
+  const validated = validateConfigValues(values);
+  mkdirSync(dir, { recursive: true });
   let raw = existsSync(p) ? readFileSync(p, "utf8") : "";
-  for (const [snakeKey, val] of Object.entries(values)) {
-    const lineVal = typeof val === "boolean" ? String(val) : String(val);
+  for (const [snakeKey, val] of Object.entries(validated)) {
+    const lineVal = yamlScalar(val);
     const regex = new RegExp(`^(${snakeKey}:\\s*).*$`, "m");
     if (regex.test(raw)) {
       raw = raw.replace(regex, `${snakeKey}: ${lineVal}`);
@@ -371,13 +432,20 @@ export function ensureConfigDefaults(dataDir) {
 
 /** Run `mnemosyne config reload` to hot-reload the config file. */
 export async function reloadMnemosyneConfig(cliPath, dataDir, timeoutMs = 10_000) {
-  const env = { ...process.env, MNEMOSYNE_DATA_DIR: dataDir };
+  const env = { ...process.env, MNEMOSYNE_DATA_DIR: expandPath(dataDir) };
   return runMnemosyne(cliPath, "config", ["reload"], timeoutMs, env);
 }
 
 export function apply(ctx, config) {
   const cfg = () => config ?? {};
   const env = () => buildEnv(cfg());
+  // Numeric guardrails at the trust boundary (model args + user config).
+  const clampNum = (v, fallback, min, max) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+  };
+  const callTimeout = () => clampNum(cfg().timeoutMs, 20_000, 1_000, 600_000);
+  const topKLimit = () => Math.floor(clampNum(cfg().defaultTopK, 5, 1, 100));
   // Resolve the CLI path once (checks PATH + uv tools dir). Tools and panel
   // routes all go through this so they share one resolution path.
   const resolveCliPath = () => {
@@ -391,7 +459,7 @@ export function apply(ctx, config) {
     return cli;
   };
   const run = (command, args) =>
-    runMnemosyne(resolveCliPath(), command, args, cfg().timeoutMs ?? 20_000, env());
+    runMnemosyne(resolveCliPath(), command, args, callTimeout(), env());
 
   // Register the "mnemosyne" settings namespace so the client panel's
   // settingsScope can read/write config. Hard-dep via ctx.inject (not soft
@@ -416,6 +484,7 @@ export function apply(ctx, config) {
         path: "/mnemosyne/diagnose",
         handler: async (req, res) => {
           if (req.method !== "GET") return sendJson(res, 405, { error: "GET only" });
+          if (!trustedRead(req)) return sendJson(res, 403, { error: "untrusted origin" });
           try {
             sendJson(res, 200, await diagnoseMnemosyne(cfg()));
           } catch (e) {
@@ -433,7 +502,7 @@ export function apply(ctx, config) {
           if (req.method !== "POST") return sendJson(res, 405, { error: "POST only" });
           if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
           try {
-            sendJson(res, 200, await setupMnemosyne());
+            sendJson(res, 200, await setupMnemosyne(cfg()));
           } catch (e) {
             sendJson(res, 500, { error: String(e?.message ?? e) });
           }
@@ -467,8 +536,9 @@ export function apply(ctx, config) {
         path: "/mnemosyne/config",
         handler: async (req, res) => {
           if (req.method === "GET") {
+            if (!trustedRead(req)) return sendJson(res, 403, { error: "untrusted origin" });
             try {
-              const yaml = readMnemosyneConfigYaml(cfg().dataDir ?? DEFAULT_DATA_DIR);
+              const yaml = readMnemosyneConfigYaml(cfg().dataDir);
               // Merge defaults under user values so empty fields show defaults
               const merged = {};
               for (const [k, v] of Object.entries(MNEMOSYNE_YAML_DEFAULTS)) {
@@ -482,7 +552,7 @@ export function apply(ctx, config) {
             if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
             try {
               const body = await readJsonBody(req);
-              const dataDir = cfg().dataDir ?? DEFAULT_DATA_DIR;
+              const dataDir = cfg().dataDir;
               const result = writeMnemosyneConfigYaml(dataDir, body);
               // Hot-reload the config so changes take effect without restarting dsh
               let reloadMsg = "";
@@ -492,12 +562,13 @@ export function apply(ctx, config) {
               } catch { /* reload failure is non-fatal — file is still written */ }
               sendJson(res, 200, { ...result, reload: reloadMsg.trim() });
             } catch (e) {
+              if (e instanceof ConfigValidationError) return sendJson(res, 400, { error: e.message });
               sendJson(res, 500, { error: String(e?.message ?? e) });
             }
           } else if (req.method === "DELETE") {
             if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
             try {
-              const dataDir = cfg().dataDir ?? DEFAULT_DATA_DIR;
+              const dataDir = cfg().dataDir;
               // Write all panel-managed keys back to their mnemosyne defaults
               const result = writeMnemosyneConfigYaml(dataDir, MNEMOSYNE_YAML_DEFAULTS);
               let reloadMsg = "";
@@ -522,26 +593,35 @@ export function apply(ctx, config) {
   // Auto-sleep on turn/end: when auto_sleep is enabled in config.yaml and
   // working memory exceeds sleep_threshold, run `mnemosyne sleep` to
   // consolidate. Reads from config.yaml (dataDir/config.yaml) so panel edits
-  // take effect without restart.
+  // take effect without restart. In-flight gate: overlapping turn/end events
+  // must not stack concurrent stats/sleep subprocesses.
+  let autoSleepInFlight = false;
   ctx.effect(() =>
     ctx.on("session/event", async (_session, event) => {
       if (event?.type !== "turn/end") return;
+      if (autoSleepInFlight) return;
+      autoSleepInFlight = true;
       try {
-        const dataDir = cfg().dataDir ?? DEFAULT_DATA_DIR;
+        const dataDir = cfg().dataDir;
         const yamlCfg = readMnemosyneConfigYaml(dataDir);
         const autoSleep = yamlCfg.auto_sleep_enabled !== "false" && yamlCfg.auto_sleep_enabled !== false;
         if (!autoSleep) return;
         const threshold = Number(yamlCfg.sleep_threshold) || 20;
         const cli = resolveCliPath();
         const e = env();
-        const stats = await runMnemosyne(cli, "stats", [], cfg().timeoutMs ?? 20_000, e);
+        // Sleep may download a GGUF model on first run — give it more time
+        // than the per-call timeout, but never less.
+        const sleepTimeout = Math.max(callTimeout(), 60_000);
+        const stats = await runMnemosyne(cli, "stats", [], callTimeout(), e);
         const m = stats.match(/Working memory:\s*(\d+)/);
         const count = m ? Number(m[1]) : 0;
         if (count >= threshold) {
-          await runMnemosyne(cli, "sleep", [], cfg().timeoutMs ?? 60_000, e);
+          await runMnemosyne(cli, "sleep", [], sleepTimeout, e);
         }
       } catch {
         // Auto-sleep failures are non-fatal — don't disrupt the session
+      } finally {
+        autoSleepInFlight = false;
       }
     }),
     "mnemosyne: auto-sleep on turn/end"
@@ -562,7 +642,11 @@ export function apply(ctx, config) {
             },
             output: TEXT_OUTPUT,
             async execute(args) {
-              return run("store", storeArgs(args));
+              return run("store", storeArgs({
+                content: String(args?.content ?? ""),
+                source: args?.source === undefined ? undefined : String(args.source),
+                importance: args?.importance == null ? undefined : clampNum(args.importance, 0.5, 0, 1),
+              }));
             },
           })
         ),
@@ -582,7 +666,8 @@ export function apply(ctx, config) {
             },
             output: TEXT_OUTPUT,
             async execute(args) {
-              return run("recall", recallArgs({ query: args.query, topK: args.top_k }, cfg().defaultTopK ?? 5));
+              const topK = args?.top_k == null ? undefined : Math.floor(clampNum(args.top_k, topKLimit(), 1, 100));
+              return run("recall", recallArgs({ query: String(args?.query ?? ""), topK }, topKLimit()));
             },
           })
         ),
@@ -599,7 +684,7 @@ export function apply(ctx, config) {
             parameters: { id: { type: "string", required: true, description: "The memory ID returned by mnemosyne_remember." } },
             output: TEXT_OUTPUT,
             async execute(args) {
-              return run("delete", [args.id]);
+              return run("delete", [String(args?.id ?? "")]);
             },
           })
         ),
