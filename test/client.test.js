@@ -11,7 +11,14 @@ const clientSrc = readFileSync(fileURLToPath(new URL("../src/client.js", import.
 
 function loadClientModule() {
   const savedWindow = globalThis.window;
-  const stubReact = { createElement: (type, props, ...children) => ({ type, props, children }), useState: () => [null, () => {}], useCallback: (fn) => fn, useEffect: () => {} };
+  const stubReact = {
+    createElement: (type, props, ...children) => ({ type, props, children }),
+    useState: (init) => [typeof init === "function" ? init() : init, () => {}],
+    useCallback: (fn) => fn,
+    useEffect: () => {},
+    useMemo: (fn) => fn(),
+    useSyncExternalStore: (_sub, snap) => snap(),
+  };
   const mockRequire = (name) => {
     if (name === "react") return stubReact;
     throw new Error("unexpected require: " + name);
@@ -41,20 +48,27 @@ describe("client module", () => {
     assert.equal(typeof mod.apply, "function");
     assert.equal(typeof mod.name, "string");
     assert.ok(Array.isArray(mod.inject));
-    assert.deepEqual(mod.inject, ["slots", "locale"]);
+    assert.deepEqual(mod.inject, ["settingsScope", "slots", "locale"]);
   });
 
   it("apply registers a locale dictionary and a settings.section slot", () => {
     const registered = { locale: [], slots: [] };
     const ctx = {
-      effect: (fn, label) => fn(),
+      effect: (fn) => fn(),
       locale: {
         register: (ns, dict) => { registered.locale.push({ ns, dict }); },
         bind: (ns) => (key) => `[${ns}]${key}`,
       },
+      settingsScope: {
+        bind: (opts) => ({ namespace: opts.namespace, getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
+      },
       slots: {
-        inject: (slot, fn) => fn(),
-        register: (opts, render) => { registered.slots.push({ opts, render }); return () => {}; },
+        inject: (slot, gen) => {
+          for (const r of gen()) {
+            registered.slots.push({ opts: r.opts, render: r.render });
+          }
+        },
+        register: (opts, render) => ({ opts, render }),
       },
     };
     mod.apply(ctx);
@@ -77,12 +91,26 @@ describe("client module", () => {
     const ctx = {
       effect: (fn) => fn(),
       locale: { register: () => {}, bind: (ns) => (k) => k },
-      slots: { inject: (_s, fn) => fn(), register: (opts, render) => { slot = { opts, render }; return () => {}; } },
+      settingsScope: {
+        bind: () => ({ getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
+      },
+      slots: {
+        inject: (_s, gen) => {
+          for (const r of gen()) {
+            slot = { opts: r.opts, render: r.render };
+          }
+        },
+        register: (opts, render) => ({ opts, render }),
+      },
     };
     mod.apply(ctx);
-    const el = slot.render({ t: (k) => k });
-    // render returns a React element whose type is the panel component
-    assert.equal(typeof el.type, "function");
-    assert.equal(typeof el.props.t, "function");
+    const el = slot.render({ t: (k) => k, scope: ctx.settingsScope.bind() });
+    // render returns h("ul", ..., h(MnemosynePanel, props))
+    assert.equal(el.type, "ul");
+    assert.ok(el.children.length > 0);
+    const panel = el.children[0];
+    assert.equal(typeof panel.type, "function"); // MnemosynePanel
+    assert.equal(typeof panel.props.t, "function");
+    assert.ok(panel.props.scope);
   });
 });
