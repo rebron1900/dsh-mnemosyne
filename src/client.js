@@ -214,7 +214,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const getSnapshot = useMemo(() => (scope ? scope.getSnapshot.bind(scope) : () => ({})), [scope]);
     const config = useSyncExternalStore(subscribe, getSnapshot);
 
-    const [open, setOpen] = useState(true);
+    const [cardOpen, setCardOpen] = useState({ status: true });
     const [drafts, setDrafts] = useState({});
     const [saving, setSaving] = useState(false);
     const [failedFields, setFailedFields] = useState([]);
@@ -254,9 +254,14 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       finally { setBusy(null); }
     };
 
+    // scope.getSnapshot() returns { value, user, writable, status, revision }
+    // — value holds the merged config (defaults + user overrides)
+    const snapshot = config || {};
+    const stored = (snapshot.value && typeof snapshot.value === "object") ? snapshot.value : {};
+
     const format = (key) => {
       if (key in drafts) return drafts[key];
-      const v = config[key];
+      const v = stored[key];
       return v === undefined ? "" : v;
     };
     const isDirty = Object.keys(drafts).length > 0;
@@ -322,23 +327,28 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       );
     };
 
-    return h("li", { className: "mn-card mn-card-open" },
-      h("button", { type: "button", className: "mn-header", "aria-expanded": open, onClick: () => setOpen(!open) },
-        h("span", { className: "mn-headText" },
-          h("span", { className: "mn-name" }, t("nav")),
-          h("span", { className: "mn-desc" }, t("desc")),
+    // ── Card builder: each card is a collapsible <li> ─────────────────────
+    const renderCard = (cardKey, cardTitle, isOpen, children) => {
+      // Track open state per-card via a ref object
+      const openState = cardOpen[cardKey] ?? true;
+      return h("li", { className: "mn-card" + (openState ? " mn-card-open" : ""), key: cardKey },
+        h("button", {
+          type: "button", className: "mn-header", "aria-expanded": openState,
+          onClick: () => setCardOpen((s) => ({ ...s, [cardKey]: !openState })),
+        },
+          h("span", { className: "mn-headText" },
+            h("span", { className: "mn-name" }, cardTitle),
+          ),
+          isDirty ? h("span", { className: "mn-pending" }, t("pending")) : null,
+          h("span", { className: "mn-chevron" + (openState ? " mn-chevron-open" : "") }, "▾"),
         ),
-        isDirty ? h("span", { className: "mn-pending" }, t("pending")) : null,
-        h("span", { className: "mn-chevron" + (open ? " mn-chevron-open" : "") }, "▾"),
-      ),
-      open ? h("div", { className: "mn-body" },
-        isDirty ? h("div", { className: "mn-savebar", role: "region", "aria-label": t("pending") },
-          failedFields.length > 0
-            ? h("span", { className: "mn-status-error", role: "alert" }, t("saveFailed") + " (" + failedFields.join(", ") + ")")
-            : h("span", { className: "mn-pending" }, t("pending")),
-          h("button", { type: "button", className: "mn-btn", disabled: saving, onClick: clearDrafts }, t("discard")),
-          h("button", { type: "button", className: "mn-btn mn-btn-save", disabled: saving, onClick: save }, saving ? t("saving") : t("save")),
-        ) : null,
+        openState ? h("div", { className: "mn-body" }, ...children) : null,
+      );
+    };
+
+    return h(React.Fragment, null,
+      // Card 1: Status & actions
+      renderCard("status", t("nav"), true, [
         h("div", { className: "mn-status" },
           h("div", { className: "mn-status-row" },
             (diag?.cliReady ? "✅ " : "⚠️ ") + (diag?.cliReady ? t("cliReady") : t("cliMissing")),
@@ -354,13 +364,25 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           h("button", { type: "button", className: "mn-btn", disabled: !!busy, onClick: refresh }, t("refresh")),
         ),
         msg ? h("div", { className: "mn-msg" }, msg) : null,
-        groupOrder.map((g) =>
-          groups[g] ? h("div", { className: "mn-group", key: g },
-            h("p", { className: "mn-group-title" }, t(g)),
-            groups[g].map(renderField),
-          ) : null,
+      ]),
+      // Save bar (between status and config cards, shown when dirty)
+      isDirty ? h("li", { className: "mn-card mn-card-open", key: "savebar" },
+        h("div", { className: "mn-body" },
+          h("div", { className: "mn-savebar", role: "region", "aria-label": t("pending") },
+            failedFields.length > 0
+              ? h("span", { className: "mn-status-error", role: "alert" }, t("saveFailed") + " (" + failedFields.join(", ") + ")")
+              : h("span", { className: "mn-pending" }, t("pending")),
+            h("button", { type: "button", className: "mn-btn", disabled: saving, onClick: clearDrafts }, t("discard")),
+            h("button", { type: "button", className: "mn-btn mn-btn-save", disabled: saving, onClick: save }, saving ? t("saving") : t("save")),
+          ),
         ),
       ) : null,
+      // Config cards — one per group
+      ...groupOrder.map((g) =>
+        groups[g] ? renderCard(g, t(g), false,
+          groups[g].map(renderField),
+        ) : null,
+      ),
     );
   }
 
