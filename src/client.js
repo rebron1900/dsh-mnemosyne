@@ -173,28 +173,33 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
   const inject = ["settingsScope", "slots", "locale"];
 
   // type: "toggle" | "text" | "number" | "area"
+  // yaml: config.yaml key (snake_case) if this field is stored in config.yaml;
+  //       omitted for dsh-only fields (cli, defaultTopK, timeoutMs).
   const FIELDS = [
     { group: "groupPlugin", key: "cli", type: "text", label: "f_cli", hint: "f_cli_hint" },
     { group: "groupPlugin", key: "defaultTopK", type: "number", label: "f_defaultTopK", hint: "f_defaultTopK_hint" },
     { group: "groupPlugin", key: "timeoutMs", type: "number", label: "f_timeoutMs", hint: "f_timeoutMs_hint" },
-    { group: "groupPlugin", key: "dataDir", type: "text", label: "f_dataDir", hint: "f_dataDir_hint" },
-    { group: "groupEmbedding", key: "noEmbeddings", type: "toggle", label: "f_noEmbeddings", hint: "f_noEmbeddings_hint" },
-    { group: "groupEmbedding", key: "embeddingModel", type: "text", label: "f_embeddingModel", hint: "f_embeddingModel_hint" },
-    { group: "groupEmbedding", key: "embeddingDim", type: "number", label: "f_embeddingDim", hint: "f_embeddingDim_hint" },
-    { group: "groupEmbedding", key: "embeddingApiUrl", type: "text", label: "f_embeddingApiUrl", hint: "f_embeddingApiUrl_hint" },
-    { group: "groupEmbedding", key: "embeddingApiKey", type: "text", label: "f_embeddingApiKey", hint: "f_embeddingApiKey_hint", secret: true },
-    { group: "groupLLM", key: "llmEnabled", type: "toggle", label: "f_llmEnabled", hint: "f_llmEnabled_hint" },
-    { group: "groupLLM", key: "llmBaseUrl", type: "text", label: "f_llmBaseUrl", hint: "f_llmBaseUrl_hint" },
-    { group: "groupLLM", key: "llmApiKey", type: "text", label: "f_llmApiKey", hint: "f_llmApiKey_hint", secret: true },
-    { group: "groupLLM", key: "llmModel", type: "text", label: "f_llmModel", hint: "f_llmModel_hint" },
-    { group: "groupLLM", key: "llmTimeout", type: "number", label: "f_llmTimeout", hint: "f_llmTimeout_hint" },
-    { group: "groupRecall", key: "polyphonicRecall", type: "toggle", label: "f_polyphonicRecall", hint: "f_polyphonicRecall_hint" },
-    { group: "groupWM", key: "wmMaxItems", type: "number", label: "f_wmMaxItems", hint: "f_wmMaxItems_hint" },
-    { group: "groupWM", key: "wmTtlHours", type: "number", label: "f_wmTtlHours", hint: "f_wmTtlHours_hint" },
-    { group: "groupWM", key: "autoSleep", type: "toggle", label: "f_autoSleep", hint: "f_autoSleep_hint" },
-    { group: "groupWM", key: "sleepThreshold", type: "number", label: "f_sleepThreshold", hint: "f_sleepThreshold_hint" },
-    { group: "groupWM", key: "ignorePatterns", type: "area", label: "f_ignorePatterns", hint: "f_ignorePatterns_hint" },
+    { group: "groupPlugin", key: "dataDir", type: "text", label: "f_dataDir", hint: "f_dataDir_hint", yaml: "data_dir" },
+    { group: "groupEmbedding", key: "noEmbeddings", type: "toggle", label: "f_noEmbeddings", hint: "f_noEmbeddings_hint", yaml: "no_embeddings" },
+    { group: "groupEmbedding", key: "embeddingModel", type: "text", label: "f_embeddingModel", hint: "f_embeddingModel_hint", yaml: "embedding_model" },
+    { group: "groupEmbedding", key: "embeddingDim", type: "number", label: "f_embeddingDim", hint: "f_embeddingDim_hint", yaml: "embedding_dim" },
+    { group: "groupEmbedding", key: "embeddingApiUrl", type: "text", label: "f_embeddingApiUrl", hint: "f_embeddingApiUrl_hint", yaml: "embedding_api_url" },
+    { group: "groupEmbedding", key: "embeddingApiKey", type: "text", label: "f_embeddingApiKey", hint: "f_embeddingApiKey_hint", secret: true, yaml: "embedding_api_key" },
+    { group: "groupLLM", key: "llmEnabled", type: "toggle", label: "f_llmEnabled", hint: "f_llmEnabled_hint", yaml: "llm_enabled" },
+    { group: "groupLLM", key: "llmBaseUrl", type: "text", label: "f_llmBaseUrl", hint: "f_llmBaseUrl_hint", yaml: "llm_base_url" },
+    { group: "groupLLM", key: "llmApiKey", type: "text", label: "f_llmApiKey", hint: "f_llmApiKey_hint", secret: true, yaml: "llm_api_key" },
+    { group: "groupLLM", key: "llmModel", type: "text", label: "f_llmModel", hint: "f_llmModel_hint", yaml: "llm_model" },
+    { group: "groupLLM", key: "llmTimeout", type: "number", label: "f_llmTimeout", hint: "f_llmTimeout_hint", yaml: "llm_timeout" },
+    { group: "groupRecall", key: "polyphonicRecall", type: "toggle", label: "f_polyphonicRecall", hint: "f_polyphonicRecall_hint", yaml: "polyphonic_recall" },
+    { group: "groupWM", key: "wmMaxItems", type: "number", label: "f_wmMaxItems", hint: "f_wmMaxItems_hint", yaml: "wm_max_items" },
+    { group: "groupWM", key: "wmTtlHours", type: "number", label: "f_wmTtlHours", hint: "f_wmTtlHours_hint", yaml: "wm_ttl_hours" },
+    { group: "groupWM", key: "autoSleep", type: "toggle", label: "f_autoSleep", hint: "f_autoSleep_hint", yaml: "auto_sleep_enabled" },
+    { group: "groupWM", key: "sleepThreshold", type: "number", label: "f_sleepThreshold", hint: "f_sleepThreshold_hint", yaml: "sleep_threshold" },
+    { group: "groupWM", key: "ignorePatterns", type: "area", label: "f_ignorePatterns", hint: "f_ignorePatterns_hint", yaml: "ignore_patterns" },
   ];
+  // Quick lookup: field key → yaml key
+  const FIELD_TO_YAML = {};
+  for (const f of FIELDS) if (f.yaml) FIELD_TO_YAML[f.key] = f.yaml;
 
   // ── Styles: DSH design tokens (mirrors dsh-vision-router) ──────────────
   const CSS =
@@ -311,24 +316,31 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     };
 
     // scope.getSnapshot() returns { value, user, writable, status, revision }
-    // — value holds the merged config (defaults + user overrides)
+    // — value holds the merged config (defaults + user overrides).
+    // While loading (status !== "ready"), fall back to snapshot.base which
+    // carries the schema defaults so the form shows correct defaults immediately.
     const snapshot = config || {};
-    const stored = (snapshot.value && typeof snapshot.value === "object") ? snapshot.value : {};
+    const stored = (snapshot.value && typeof snapshot.value === "object")
+      ? snapshot.value
+      : (snapshot.base && typeof snapshot.base === "object") ? snapshot.base : {};
 
+    // Format a field value: config.yaml fields read from /mnemosyne/config,
+    // dsh-only fields (cli, defaultTopK, timeoutMs) read from settings scope.
     const format = (key) => {
       if (key in drafts) return drafts[key];
-      // config.yaml keys read from /mnemosyne/config, not DSH settings scope
-      if (key in CONFIG_YAML_FIELDS) {
-        const snake = CONFIG_YAML_FIELDS[key];
-        const v = yamlConfig[snake];
-        if (key === "ignorePatterns") {
-          if (v == null) return "";
-          if (Array.isArray(v)) return v.join("\n");
-          return String(v);
+      const f = FIELDS.find((x) => x.key === key);
+      if (f && f.yaml) {
+        const raw = yamlConfig[f.yaml];
+        if (raw != null && raw !== "") {
+          if (f.type === "toggle") return raw === "true" || raw === true;
+          if (f.type === "number") { const n = Number(raw); return Number.isFinite(n) ? n : ""; }
+          return String(raw);
         }
-        if (key === "autoSleep") return v === "true" || v === true;
-        if (key === "sleepThreshold") return v != null ? Number(v) : "";
-        return v ?? "";
+        // config.yaml has no value — fall back to settings scope default
+        const fallback = stored[key];
+        if (f.type === "toggle") return fallback ?? false;
+        if (f.type === "number") return fallback ?? "";
+        return fallback ?? "";
       }
       const v = stored[key];
       return v === undefined ? "" : v;
@@ -337,42 +349,38 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const setDraft = (key, value) => { setDrafts((d) => ({ ...d, [key]: value })); setFailedFields([]); };
     const clearDrafts = () => { setDrafts({}); setFailedFields([]); };
 
-    // config.yaml keys: stored in dataDir/config.yaml, not in DSH settings
-    const CONFIG_YAML_FIELDS = {
-      autoSleep: "auto_sleep",
-      sleepThreshold: "sleep_threshold",
-      ignorePatterns: "ignore_patterns",
-    };
-
     const save = async () => {
       setSaving(true); setFailedFields([]);
       const failed = [];
-      // Split drafts: DSH settings keys vs config.yaml keys
+      // Split drafts: dsh-only keys go to settings scope, config.yaml keys to HTTP route
       const settingsDrafts = {};
-      const yamlDrafts = {};
+      const yamlPayload = {};
       for (const key of Object.keys(drafts)) {
-        if (key in CONFIG_YAML_FIELDS) yamlDrafts[key] = drafts[key];
-        else settingsDrafts[key] = drafts[key];
+        const f = FIELDS.find((x) => x.key === key);
+        if (f && f.yaml) {
+          yamlPayload[f.yaml] = drafts[key];
+        } else {
+          settingsDrafts[key] = drafts[key];
+        }
       }
-      // Save DSH settings keys via scope
+      // Save dsh-only keys via settings scope
       if (scope && typeof scope.set === "function") {
         for (const key of Object.keys(settingsDrafts)) {
           try { await scope.set(key, settingsDrafts[key]); } catch { failed.push(key); }
         }
       }
       // Save config.yaml keys via HTTP route
-      if (Object.keys(yamlDrafts).length > 0) {
+      if (Object.keys(yamlPayload).length > 0) {
         try {
-          const payload = {};
-          for (const [camel, snake] of Object.entries(CONFIG_YAML_FIELDS)) {
-            if (camel in yamlDrafts) {
-              payload[snake] = camel === "ignorePatterns"
-                ? (Array.isArray(yamlDrafts[camel]) ? yamlDrafts[camel] : String(yamlDrafts[camel]).split("\n").map(s => s.trim()).filter(Boolean))
-                : yamlDrafts[camel];
-            }
-          }
-          await fetch("/mnemosyne/config", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-        } catch { failed.push(...Object.keys(yamlDrafts)); }
+          await fetch("/mnemosyne/config", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(yamlPayload),
+          });
+          // Refresh yaml config after write
+          const cfgRes = await fetch("/mnemosyne/config").then((r) => r.json()).catch(() => ({ ok: false }));
+          if (cfgRes.ok && cfgRes.config) setYamlConfig(cfgRes.config);
+        } catch { failed.push(...Object.keys(drafts).filter((k) => FIELD_TO_YAML[k])); }
       }
       setSaving(false);
       if (failed.length > 0) setFailedFields(failed);

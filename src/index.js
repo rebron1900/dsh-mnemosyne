@@ -243,62 +243,69 @@ const TEXT_OUTPUT = {
   render: (_args, value) => [{ type: "text", text: value }],
 };
 
-// --- config.yaml read/write (memory.mnemosyne section) ---
-const CONFIG_YAML_KEYS = ["auto_sleep", "sleep_threshold", "ignore_patterns"];
+// --- config.yaml read/write (flat top-level keys) ---
+// mnemosyne's config.yaml is a flat file of `key: value` lines at top level.
+// We read/write the keys that map to our panel fields.
 
-/** Read the memory.mnemosyne section from dataDir/config.yaml. */
+/** Panel camelCase → config.yaml snake_case mapping. */
+export const CONFIG_YAML_MAP = {
+  dataDir: "data_dir",
+  noEmbeddings: "no_embeddings",
+  embeddingModel: "embedding_model",
+  embeddingDim: "embedding_dim",
+  embeddingApiUrl: "embedding_api_url",
+  embeddingApiKey: "embedding_api_key",
+  llmEnabled: "llm_enabled",
+  llmBaseUrl: "llm_base_url",
+  llmApiKey: "llm_api_key",
+  llmModel: "llm_model",
+  llmTimeout: "llm_timeout",
+  polyphonicRecall: "polyphonic_recall",
+  wmMaxItems: "wm_max_items",
+  wmTtlHours: "wm_ttl_hours",
+  autoSleep: "auto_sleep_enabled",
+  sleepThreshold: "sleep_threshold",
+  ignorePatterns: "ignore_patterns",
+};
+
+/** Parse a flat `key: value` YAML file into { key: value } object. */
 export function readMnemosyneConfigYaml(dataDir) {
   const p = join(dataDir, "config.yaml");
   if (!existsSync(p)) return {};
   const raw = readFileSync(p, "utf8");
   const result = {};
-  let inSection = false;
-  let indent = "";
   for (const line of raw.split("\n")) {
-    if (/^memory:\s*$/.test(line)) { inSection = true; continue; }
-    if (inSection && /^  mnemosyne:/.test(line)) { indent = "    "; continue; }
-    if (inSection && indent && line.startsWith(indent)) {
-      const m = line.trim().match(/^(\w+):\s*(.*)$/);
-      if (m && CONFIG_YAML_KEYS.includes(m[1])) {
-        result[m[1]] = m[2] === "" ? null : m[2];
-      }
-    } else if (inSection && line && !line.startsWith(" ")) {
-      inSection = false; indent = "";
-    }
+    if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^(\w+):\s*(.*)$/);
+    if (m) result[m[1]] = m[2];
   }
   return result;
 }
 
-/** Write the memory.mnemosyne section into dataDir/config.yaml (merge). */
+/** Update specific top-level keys in a flat config.yaml (merge, preserves others). */
 export function writeMnemosyneConfigYaml(dataDir, values) {
   const p = join(dataDir, "config.yaml");
   mkdirSync(dataDir, { recursive: true });
   let raw = existsSync(p) ? readFileSync(p, "utf8") : "";
-  // Build the section lines
-  const sectionLines = [];
-  if (values.auto_sleep !== undefined) sectionLines.push(`    auto_sleep: ${values.auto_sleep}`);
-  if (values.sleep_threshold !== undefined) sectionLines.push(`    sleep_threshold: ${values.sleep_threshold}`);
-  if (values.ignore_patterns !== undefined) {
-    const patterns = Array.isArray(values.ignore_patterns)
-      ? values.ignore_patterns
-      : String(values.ignore_patterns).split("\n").map(s => s.trim()).filter(Boolean);
-    sectionLines.push("    ignore_patterns:");
-    for (const pat of patterns) sectionLines.push(`      - "${pat.replace(/"/g, '\\"')}"`);
-  }
-  // Check if memory.mnemosyne section already exists
-  const sectionRegex = /^(memory:\n  mnemosyne:\n)((?:    .*\n)*)/m;
-  if (sectionRegex.test(raw)) {
-    // Replace existing section
-    raw = raw.replace(sectionRegex, `memory:\n  mnemosyne:\n${sectionLines.map(l => l + "\n").join("")}`);
-  } else if (/^memory:\s*$/m.test(raw)) {
-    // memory: exists but no mnemosyne subsection — append after memory:
-    raw = raw.replace(/^(memory:\n)/m, `$1  mnemosyne:\n${sectionLines.map(l => l + "\n").join("")}`);
-  } else {
-    // No memory: section at all — append
-    raw = raw + (raw && !raw.endsWith("\n") ? "\n" : "") + "memory:\n  mnemosyne:\n" + sectionLines.map(l => l + "\n").join("");
+  for (const [snakeKey, val] of Object.entries(values)) {
+    const lineVal = typeof val === "boolean" ? String(val) : String(val);
+    const regex = new RegExp(`^(${snakeKey}:\\s*).*$`, "m");
+    if (regex.test(raw)) {
+      raw = raw.replace(regex, `${snakeKey}: ${lineVal}`);
+    } else {
+      raw = raw + (raw && !raw.endsWith("\n") ? "\n" : "") + `${snakeKey}: ${lineVal}\n`;
+    }
   }
   writeFileSync(p, raw, "utf8");
   return { ok: true, path: p };
+}
+
+/** Parse value string from config.yaml into the right JS type for a given field type. */
+export function parseYamlValue(raw, type) {
+  if (raw === undefined || raw === "") return type === "toggle" ? false : (type === "number" ? undefined : "");
+  if (type === "toggle") return raw === "true" || raw === true;
+  if (type === "number") { const n = Number(raw); return Number.isFinite(n) ? n : undefined; }
+  return String(raw);
 }
 
 export function apply(ctx, config) {
@@ -428,7 +435,7 @@ export function apply(ctx, config) {
       try {
         const dataDir = cfg().dataDir ?? DEFAULT_DATA_DIR;
         const yamlCfg = readMnemosyneConfigYaml(dataDir);
-        const autoSleep = yamlCfg.auto_sleep !== "false" && yamlCfg.auto_sleep !== false;
+        const autoSleep = yamlCfg.auto_sleep_enabled !== "false" && yamlCfg.auto_sleep_enabled !== false;
         if (!autoSleep) return;
         const threshold = Number(yamlCfg.sleep_threshold) || 20;
         const cli = resolveCliPath();
