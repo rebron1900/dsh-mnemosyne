@@ -40,6 +40,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       pending: "有未保存的修改",
       saveFailed: "保存失败",
       footerHint: "面板仅列出常用配置。如需修改更多参数，请直接编辑 ~/.dsh/mnemosyne/config.yaml，保存后大部分配置自动热加载（向量类型 vec_type 改动需重启 dsh）。",
+      resetAll: "恢复默认配置",
       groupPlugin: "插件",
       groupPlugin_hint: "dsh-mnemosyne 插件自身行为。这些参数控制 CLI 调用方式与数据存放位置，仅作用于 dsh-mnemosyne，不影响 mnemosyne CLI 本体。",
       groupEmbedding: "Embedding",
@@ -117,6 +118,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       pending: "Unsaved changes",
       saveFailed: "Save failed",
       footerHint: "This panel covers common settings only. To change more parameters, edit ~/.dsh/mnemosyne/config.yaml directly — most changes hot-reload automatically (only vec_type requires a dsh restart).",
+      resetAll: "Reset to Defaults",
       groupPlugin: "Plugin",
       groupPlugin_hint: "dsh-mnemosyne plugin behavior. These control CLI invocation and data location; they only affect the dsh plugin, not the mnemosyne CLI itself.",
       groupEmbedding: "Embedding",
@@ -251,7 +253,9 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-status-error{color:var(--dsw-alias-label-error);font-size:12px;line-height:1.5}' +
     '.mn-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0 4px}' +
     '.mn-msg{font-size:12px;color:var(--dsw-alias-label-secondary);padding:4px 0}' +
-    '.mn-footer{list-style:none;text-align:center;font-size:12px;color:var(--dsw-alias-label-tertiary);line-height:1.6;padding:12px 16px 4px}' +
+    '.mn-footer{list-style:none;text-align:center;padding:12px 16px 4px}' +
+    '.mn-footer-actions{display:flex;justify-content:center;margin-bottom:10px}' +
+    '.mn-footer-hint{font-size:12px;color:var(--dsw-alias-label-tertiary);line-height:1.6;margin:0}' +
     '@media(max-width:640px){.mn-field{flex-direction:column;gap:6px}.mn-field-left{flex:none;padding-top:0}}';
 
   let stylesInstalled = false;
@@ -390,6 +394,17 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       catch { setFailedFields([key]); }
     };
 
+    const resetAll = async () => {
+      setSaving(true); setFailedFields([]);
+      try {
+        await fetch("/mnemosyne/config", { method: "DELETE" });
+        const cfgRes = await fetch("/mnemosyne/config").then((r) => r.json()).catch(() => ({ ok: false }));
+        if (cfgRes.ok && cfgRes.config) setYamlConfig(cfgRes.config);
+        setDrafts({});
+      } catch { setFailedFields(["reset"]); }
+      finally { setSaving(false); }
+    };
+
     const total = (() => {
       const m = diag?.stats?.match(/Total memories:\s*(\d+)/);
       return m ? Number(m[1]) : null;
@@ -507,8 +522,13 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           t(g + "_hint"),
         ) : null,
       ),
-      // Footer hint
-      h("li", { className: "mn-footer" }, t("footerHint")),
+      // Footer: reset button + hint
+      h("li", { className: "mn-footer" },
+        h("div", { className: "mn-footer-actions" },
+          h("button", { type: "button", className: "mn-btn", disabled: saving, onClick: resetAll }, saving ? t("saving") : t("resetAll")),
+        ),
+        h("p", { className: "mn-footer-hint" }, t("footerHint")),
+      ),
     );
   }
 

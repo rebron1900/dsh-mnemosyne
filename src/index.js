@@ -247,6 +247,27 @@ const TEXT_OUTPUT = {
 // mnemosyne's config.yaml is a flat file of `key: value` lines at top level.
 // We read/write the keys that map to our panel fields.
 
+/** mnemosyne upstream defaults for panel-managed config.yaml keys. */
+const MNEMOSYNE_YAML_DEFAULTS = {
+  data_dir: "",
+  no_embeddings: false,
+  embedding_model: "BAAI/bge-small-en-v1.5",
+  embedding_dim: 384,
+  embedding_api_url: "",
+  embedding_api_key: "",
+  llm_enabled: false,
+  llm_base_url: "",
+  llm_api_key: "",
+  llm_model: "",
+  llm_timeout: 60,
+  polyphonic_recall: false,
+  wm_max_items: 10000,
+  wm_ttl_hours: 168,
+  auto_sleep_enabled: true,
+  sleep_threshold: 20, // dsh-mnemosyne extension, not in upstream DEFAULTS
+  ignore_patterns: "",
+};
+
 /** Panel camelCase → config.yaml snake_case mapping. */
 export const CONFIG_YAML_MAP = {
   dataDir: "data_dir",
@@ -420,7 +441,12 @@ export function apply(ctx, config) {
           if (req.method === "GET") {
             try {
               const yaml = readMnemosyneConfigYaml(cfg().dataDir ?? DEFAULT_DATA_DIR);
-              sendJson(res, 200, { ok: true, config: yaml });
+              // Merge defaults under user values so empty fields show defaults
+              const merged = {};
+              for (const [k, v] of Object.entries(MNEMOSYNE_YAML_DEFAULTS)) {
+                merged[k] = (yaml[k] !== undefined && yaml[k] !== "") ? yaml[k] : v;
+              }
+              sendJson(res, 200, { ok: true, config: { ...yaml, ...merged } });
             } catch (e) {
               sendJson(res, 500, { error: String(e?.message ?? e) });
             }
@@ -440,8 +466,23 @@ export function apply(ctx, config) {
             } catch (e) {
               sendJson(res, 500, { error: String(e?.message ?? e) });
             }
+          } else if (req.method === "DELETE") {
+            if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
+            try {
+              const dataDir = cfg().dataDir ?? DEFAULT_DATA_DIR;
+              // Write all panel-managed keys back to their mnemosyne defaults
+              const result = writeMnemosyneConfigYaml(dataDir, MNEMOSYNE_YAML_DEFAULTS);
+              let reloadMsg = "";
+              try {
+                const cli = resolveCliPath();
+                if (cli) reloadMsg = await reloadMnemosyneConfig(cli, dataDir);
+              } catch { /* reload failure is non-fatal */ }
+              sendJson(res, 200, { ...result, reload: reloadMsg.trim() });
+            } catch (e) {
+              sendJson(res, 500, { error: String(e?.message ?? e) });
+            }
           } else {
-            sendJson(res, 405, { error: "GET or POST only" });
+            sendJson(res, 405, { error: "GET, POST, or DELETE only" });
           }
         },
       })
