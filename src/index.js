@@ -196,7 +196,11 @@ function resolveUv() {
 /** Install the mnemosyne CLI via `uv tool install`. Returns a status object. */
 export async function setupMnemosyne() {
   const existing = resolveCli("mnemosyne");
-  if (existing) return { ok: true, alreadyInstalled: true, path: existing };
+  if (existing) {
+    // Even if already installed, ensure config.yaml has defaults filled
+    ensureConfigDefaults(DEFAULT_DATA_DIR);
+    return { ok: true, alreadyInstalled: true, path: existing };
+  }
   const uv = resolveUv();
   if (!uv) {
     return {
@@ -207,6 +211,8 @@ export async function setupMnemosyne() {
   try {
     const stdout = await runExec(uv, ["tool", "install", "mnemosyne-memory"], 180_000);
     const path = resolveCli("mnemosyne");
+    // Fill in mnemosyne upstream defaults in config.yaml right after install
+    if (path) ensureConfigDefaults(DEFAULT_DATA_DIR);
     return { ok: true, alreadyInstalled: false, path, output: stdout };
   } catch (e) {
     return { ok: false, error: String(e?.message ?? e) };
@@ -222,7 +228,7 @@ function runExec(file, args, timeoutMs) {
   });
 }
 
-/** Diagnose: detect CLI, ensure data dir, run stats. Returns a structured report. */
+/** Diagnose: detect CLI, ensure data dir + config defaults, run stats. */
 export async function diagnoseMnemosyne(config) {
   const c = config ?? {};
   const cli = resolveCli(c.cli ?? "mnemosyne");
@@ -230,6 +236,11 @@ export async function diagnoseMnemosyne(config) {
   if (!cli) return { ok: false, cliReady: false, error: "mnemosyne CLI not on PATH" };
   try {
     mkdirSync(dataDir, { recursive: true });
+    // Ensure config.yaml has mnemosyne upstream defaults filled in.
+    // mnemosyne auto-generates config.yaml on first run but leaves most
+    // values empty; we write the known defaults so the panel shows real
+    // values instead of blanks.
+    ensureConfigDefaults(dataDir);
     const env = buildEnv(c);
     const stats = await runMnemosyne(cli, "stats", [], c.timeoutMs ?? 20_000, env);
     return { ok: true, cliReady: true, path: cli, dataDir, stats };
@@ -339,6 +350,23 @@ export function writeMnemosyneConfigYaml(dataDir, values) {
   }
   writeFileSync(p, raw, "utf8");
   return { ok: true, path: p };
+}
+
+/** Ensure config.yaml has mnemosyne upstream defaults for all panel-managed
+ *  keys. Only writes keys that are missing or empty — preserves user values. */
+export function ensureConfigDefaults(dataDir) {
+  const existing = readMnemosyneConfigYaml(dataDir);
+  const toWrite = {};
+  for (const [key, defaultVal] of Object.entries(MNEMOSYNE_YAML_DEFAULTS)) {
+    const current = existing[key];
+    if (current === undefined || current === null || current === "") {
+      toWrite[key] = defaultVal;
+    }
+  }
+  if (Object.keys(toWrite).length > 0) {
+    writeMnemosyneConfigYaml(dataDir, toWrite);
+  }
+  return toWrite;
 }
 
 /** Run `mnemosyne config reload` to hot-reload the config file. */
