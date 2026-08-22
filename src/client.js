@@ -156,7 +156,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
 
   // ── Styles: DSH design tokens (mirrors dsh-vision-router) ──────────────
   const CSS =
-    '.mn-card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none;transition:border-color .16s,background .16s}' +
+    '.mn-card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none;transition:border-color .16s,background .16s;margin-bottom:12px}' +
     '.mn-card:hover{border-color:var(--dsw-alias-label-dimmed)}' +
     '.mn-card-open{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}' +
     '.mn-header{appearance:none;width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer;background:0 0;border:0;border-radius:12px;align-items:center;gap:12px;padding:14px 16px;display:flex}' +

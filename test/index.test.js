@@ -32,6 +32,11 @@ function createMockCtx() {
           webServer: { register: () => () => {} },
           effect: (fn) => { effects.push(fn()); return () => {}; },
         });
+      } else if (deps[0] === "settings") {
+        fn({
+          settings: { register: () => ({ get: () => ({}), watch: () => () => {} }) },
+          effect: (fn) => { effects.push(fn()); return () => {}; },
+        });
       }
     },
   };

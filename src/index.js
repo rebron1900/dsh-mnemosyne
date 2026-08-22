@@ -245,12 +245,16 @@ export function apply(ctx, config) {
   const run = (command, args) =>
     runMnemosyne(resolveCliPath(), command, args, cfg().timeoutMs ?? 20_000, env());
 
-  // Persist config into the DSH settings namespace when the settings service is
-  // available (web profile). Headless/minimal hosts keep using entry config.
-  const settings = ctx.get("settings");
-  if (settings) {
-    ctx.effect(() => settings.register("mnemosyne", Config, { base: cfg() }), "mnemosyne: settings namespace");
-  }
+  // Register the "mnemosyne" settings namespace so the client panel's
+  // settingsScope can read/write config. Hard-dep via ctx.inject (not soft
+  // ctx.get) — same pattern as dsh-vision-router, ensures registration fires
+  // once the settings service is available.
+  ctx.inject(["settings"], (sctx) => {
+    sctx.effect(
+      () => sctx.settings.register("mnemosyne", Config, { base: cfg() }),
+      "mnemosyne: settings namespace"
+    );
+  });
 
   // HTTP routes for the client panel (Client→Host via fetch). Soft-dep on
   // webServer: headless/minimal hosts without a server simply skip these.
