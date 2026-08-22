@@ -303,7 +303,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const getSnapshot = useMemo(() => (scope ? scope.getSnapshot.bind(scope) : () => ({})), [scope]);
     const config = useSyncExternalStore(subscribe, getSnapshot);
 
-    const [cardOpen, setCardOpen] = useState({ status: true });
+    const [cardOpen, setCardOpen] = useState({ status: true, groupPlugin: true });
     const [drafts, setDrafts] = useState({});
     const [saving, setSaving] = useState(false);
     const [failedFields, setFailedFields] = useState([]);
@@ -343,7 +343,15 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       try {
         const r = await fetch("/mnemosyne/test", { method: "POST" });
         const data = await r.json();
-        setMsg(data.ok ? t("testOk") : t("testFail") + ": " + (data.error || ""));
+        if (data.ok) {
+          // The probe changes memory counts, so immediately fetch fresh stats
+          const statsRes = await fetch("/mnemosyne/diagnose", { headers: { accept: "application/json" } });
+          const stats = await statsRes.json();
+          setDiag(stats);
+          setMsg(t("testOk"));
+        } else {
+          setMsg(t("testFail") + ": " + (data.error || ""));
+        }
       } catch (e) { setMsg(t("testFail") + ": " + String(e?.message ?? e)); }
       finally { setBusy(null); }
     };
