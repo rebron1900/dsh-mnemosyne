@@ -37,6 +37,16 @@ dsh plugin --profile web add dsh-mnemosyne
 # 或手动：uv tool install mnemosyne-memory
 ```
 
+<details>
+<summary>从 GitHub 安装（不通过 npm）</summary>
+
+```bash
+git clone https://github.com/rebron1900/dsh-mnemosyne.git
+dsh plugin --profile web add ./dsh-mnemosyne
+```
+
+</details>
+
 > Setup 按钮需要 PATH 上有 `uv`。如果尚未安装 uv：
 > ```bash
 > curl -LsSf https://astral.sh/uv/install.sh | sh
