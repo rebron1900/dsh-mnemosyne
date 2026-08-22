@@ -447,12 +447,12 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         },
           h("span", { className: "mn-headText" },
             h("span", { className: "mn-name" }, cardTitle),
+            cardHint ? h("span", { className: "mn-desc" }, cardHint) : null,
           ),
           isDirty ? h("span", { className: "mn-pending" }, t("pending")) : null,
           h("span", { className: "mn-chevron" + (openState ? " mn-chevron-open" : "") }, "▾"),
         ),
         openState ? h("div", { className: "mn-body" },
-          cardHint ? h("p", { className: "mn-card-hint" }, cardHint) : null,
           ...children,
         ) : null,
       );
