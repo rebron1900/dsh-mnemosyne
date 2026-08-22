@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { accessSync, constants, mkdirSync } from "node:fs";
+import { accessSync, constants, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -20,6 +20,22 @@ function sameOrigin(req) {
   } catch {
     return false;
   }
+}
+function readJsonBody(req, limit = 1 << 20) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) { req.destroy(); reject(new Error("body too large")); return; }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+      catch { reject(new Error("invalid JSON")); }
+    });
+    req.on("error", reject);
+  });
 }
 
 /**
@@ -227,6 +243,64 @@ const TEXT_OUTPUT = {
   render: (_args, value) => [{ type: "text", text: value }],
 };
 
+// --- config.yaml read/write (memory.mnemosyne section) ---
+const CONFIG_YAML_KEYS = ["auto_sleep", "sleep_threshold", "ignore_patterns"];
+
+/** Read the memory.mnemosyne section from dataDir/config.yaml. */
+export function readMnemosyneConfigYaml(dataDir) {
+  const p = join(dataDir, "config.yaml");
+  if (!existsSync(p)) return {};
+  const raw = readFileSync(p, "utf8");
+  const result = {};
+  let inSection = false;
+  let indent = "";
+  for (const line of raw.split("\n")) {
+    if (/^memory:\s*$/.test(line)) { inSection = true; continue; }
+    if (inSection && /^  mnemosyne:/.test(line)) { indent = "    "; continue; }
+    if (inSection && indent && line.startsWith(indent)) {
+      const m = line.trim().match(/^(\w+):\s*(.*)$/);
+      if (m && CONFIG_YAML_KEYS.includes(m[1])) {
+        result[m[1]] = m[2] === "" ? null : m[2];
+      }
+    } else if (inSection && line && !line.startsWith(" ")) {
+      inSection = false; indent = "";
+    }
+  }
+  return result;
+}
+
+/** Write the memory.mnemosyne section into dataDir/config.yaml (merge). */
+export function writeMnemosyneConfigYaml(dataDir, values) {
+  const p = join(dataDir, "config.yaml");
+  mkdirSync(dataDir, { recursive: true });
+  let raw = existsSync(p) ? readFileSync(p, "utf8") : "";
+  // Build the section lines
+  const sectionLines = [];
+  if (values.auto_sleep !== undefined) sectionLines.push(`    auto_sleep: ${values.auto_sleep}`);
+  if (values.sleep_threshold !== undefined) sectionLines.push(`    sleep_threshold: ${values.sleep_threshold}`);
+  if (values.ignore_patterns !== undefined) {
+    const patterns = Array.isArray(values.ignore_patterns)
+      ? values.ignore_patterns
+      : String(values.ignore_patterns).split("\n").map(s => s.trim()).filter(Boolean);
+    sectionLines.push("    ignore_patterns:");
+    for (const pat of patterns) sectionLines.push(`      - "${pat.replace(/"/g, '\\"')}"`);
+  }
+  // Check if memory.mnemosyne section already exists
+  const sectionRegex = /^(memory:\n  mnemosyne:\n)((?:    .*\n)*)/m;
+  if (sectionRegex.test(raw)) {
+    // Replace existing section
+    raw = raw.replace(sectionRegex, `memory:\n  mnemosyne:\n${sectionLines.map(l => l + "\n").join("")}`);
+  } else if (/^memory:\s*$/m.test(raw)) {
+    // memory: exists but no mnemosyne subsection — append after memory:
+    raw = raw.replace(/^(memory:\n)/m, `$1  mnemosyne:\n${sectionLines.map(l => l + "\n").join("")}`);
+  } else {
+    // No memory: section at all — append
+    raw = raw + (raw && !raw.endsWith("\n") ? "\n" : "") + "memory:\n  mnemosyne:\n" + sectionLines.map(l => l + "\n").join("");
+  }
+  writeFileSync(p, raw, "utf8");
+  return { ok: true, path: p };
+}
+
 export function apply(ctx, config) {
   const cfg = () => config ?? {};
   const env = () => buildEnv(cfg());
@@ -313,8 +387,64 @@ export function apply(ctx, config) {
       })
     );
 
+    disposers.push(
+      web.register({
+        kind: "exact",
+        path: "/mnemosyne/config",
+        handler: async (req, res) => {
+          if (req.method === "GET") {
+            try {
+              const yaml = readMnemosyneConfigYaml(cfg().dataDir ?? DEFAULT_DATA_DIR);
+              sendJson(res, 200, { ok: true, config: yaml });
+            } catch (e) {
+              sendJson(res, 500, { error: String(e?.message ?? e) });
+            }
+          } else if (req.method === "POST") {
+            if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
+            try {
+              const body = await readJsonBody(req);
+              const result = writeMnemosyneConfigYaml(cfg().dataDir ?? DEFAULT_DATA_DIR, body);
+              sendJson(res, 200, result);
+            } catch (e) {
+              sendJson(res, 500, { error: String(e?.message ?? e) });
+            }
+          } else {
+            sendJson(res, 405, { error: "GET or POST only" });
+          }
+        },
+      })
+    );
+
     hostCtx.effect(() => () => disposers.forEach((d) => d?.()), "mnemosyne: http routes");
   });
+
+  // Auto-sleep on turn/end: when auto_sleep is enabled in config.yaml and
+  // working memory exceeds sleep_threshold, run `mnemosyne sleep` to
+  // consolidate. Reads from config.yaml (dataDir/config.yaml) so panel edits
+  // take effect without restart.
+  ctx.effect(() =>
+    ctx.on("session/event", async (_session, event) => {
+      if (event?.type !== "turn/end") return;
+      try {
+        const dataDir = cfg().dataDir ?? DEFAULT_DATA_DIR;
+        const yamlCfg = readMnemosyneConfigYaml(dataDir);
+        const autoSleep = yamlCfg.auto_sleep !== "false" && yamlCfg.auto_sleep !== false;
+        if (!autoSleep) return;
+        const threshold = Number(yamlCfg.sleep_threshold) || 20;
+        const cli = resolveCliPath();
+        const e = env();
+        const stats = await runMnemosyne(cli, "stats", [], cfg().timeoutMs ?? 20_000, e);
+        const m = stats.match(/Working memory:\s*(\d+)/);
+        const count = m ? Number(m[1]) : 0;
+        if (count >= threshold) {
+          await runMnemosyne(cli, "sleep", [], cfg().timeoutMs ?? 60_000, e);
+        }
+      } catch {
+        // Auto-sleep failures are non-fatal — don't disrupt the session
+      }
+    }),
+    "mnemosyne: auto-sleep on turn/end"
+  );
 
   ctx.inject(["tools"], (sctx) => {
     sctx.effect(

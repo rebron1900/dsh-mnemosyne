@@ -264,12 +264,17 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const [diag, setDiag] = useState(null);
     const [busy, setBusy] = useState(null);
     const [msg, setMsg] = useState(null);
+    const [yamlConfig, setYamlConfig] = useState({});
 
     const refresh = useCallback(async () => {
       setBusy("diag"); setMsg(null);
       try {
-        const r = await fetch("/mnemosyne/diagnose", { headers: { accept: "application/json" } });
-        setDiag(await r.json());
+        const [diagRes, cfgRes] = await Promise.all([
+          fetch("/mnemosyne/diagnose", { headers: { accept: "application/json" } }).then(r => r.json()),
+          fetch("/mnemosyne/config").then(r => r.json()).catch(() => ({ ok: false })),
+        ]);
+        setDiag(diagRes);
+        if (cfgRes.ok && cfgRes.config) setYamlConfig(cfgRes.config);
       } catch (e) { setDiag({ ok: false, error: String(e?.message ?? e) }); }
       finally { setBusy(null); }
     }, []);
@@ -304,6 +309,19 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
 
     const format = (key) => {
       if (key in drafts) return drafts[key];
+      // config.yaml keys read from /mnemosyne/config, not DSH settings scope
+      if (key in CONFIG_YAML_FIELDS) {
+        const snake = CONFIG_YAML_FIELDS[key];
+        const v = yamlConfig[snake];
+        if (key === "ignorePatterns") {
+          if (v == null) return "";
+          if (Array.isArray(v)) return v.join("\n");
+          return String(v);
+        }
+        if (key === "autoSleep") return v === "true" || v === true;
+        if (key === "sleepThreshold") return v != null ? Number(v) : "";
+        return v ?? "";
+      }
       const v = stored[key];
       return v === undefined ? "" : v;
     };
@@ -311,12 +329,42 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const setDraft = (key, value) => { setDrafts((d) => ({ ...d, [key]: value })); setFailedFields([]); };
     const clearDrafts = () => { setDrafts({}); setFailedFields([]); };
 
+    // config.yaml keys: stored in dataDir/config.yaml, not in DSH settings
+    const CONFIG_YAML_FIELDS = {
+      autoSleep: "auto_sleep",
+      sleepThreshold: "sleep_threshold",
+      ignorePatterns: "ignore_patterns",
+    };
+
     const save = async () => {
-      if (!scope || typeof scope.set !== "function") return;
       setSaving(true); setFailedFields([]);
       const failed = [];
+      // Split drafts: DSH settings keys vs config.yaml keys
+      const settingsDrafts = {};
+      const yamlDrafts = {};
       for (const key of Object.keys(drafts)) {
-        try { await scope.set(key, drafts[key]); } catch { failed.push(key); }
+        if (key in CONFIG_YAML_FIELDS) yamlDrafts[key] = drafts[key];
+        else settingsDrafts[key] = drafts[key];
+      }
+      // Save DSH settings keys via scope
+      if (scope && typeof scope.set === "function") {
+        for (const key of Object.keys(settingsDrafts)) {
+          try { await scope.set(key, settingsDrafts[key]); } catch { failed.push(key); }
+        }
+      }
+      // Save config.yaml keys via HTTP route
+      if (Object.keys(yamlDrafts).length > 0) {
+        try {
+          const payload = {};
+          for (const [camel, snake] of Object.entries(CONFIG_YAML_FIELDS)) {
+            if (camel in yamlDrafts) {
+              payload[snake] = camel === "ignorePatterns"
+                ? (Array.isArray(yamlDrafts[camel]) ? yamlDrafts[camel] : String(yamlDrafts[camel]).split("\n").map(s => s.trim()).filter(Boolean))
+                : yamlDrafts[camel];
+            }
+          }
+          await fetch("/mnemosyne/config", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+        } catch { failed.push(...Object.keys(yamlDrafts)); }
       }
       setSaving(false);
       if (failed.length > 0) setFailedFields(failed);

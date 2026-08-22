@@ -21,6 +21,7 @@ function createMockCtx() {
   const ctx = {
     get: (key) => (key === "skills" ? { register: (s) => skills.push(s) } : undefined),
     effect: (fn) => effects.push(fn()),
+    on: () => () => {},
     inject: (deps, fn) => {
       if (deps[0] === "tools") {
         fn({

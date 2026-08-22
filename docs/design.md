@@ -248,20 +248,22 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 `package.json` 声明 `dsh.client: { inject: [...client-ui 包], platform: "web" }` 与 `"./client"` 导出。
 
-### 10.5 Host RPC
+### 10.5 Host HTTP 路由
 
-`apply` 软依赖 `ctx.get("harness")`，注册三个 `harness.handle` 处理器供面板 `host.call`：
+`apply` 软依赖 `ctx.inject(["webServer"])`，注册 HTTP 路由供面板 `fetch` 调用：
 
-| method | 行为 |
-|---|---|
-| `mnemosyne.setup` | 检测/安装 CLI（uv tool install） |
-| `mnemosyne.diagnose` | 探测 CLI + 确保 dataDir + 跑 stats，返回结构化报告 |
-| `mnemosyne.testConnection` | store 探针记忆 → delete，验证闭环 |
+| path | method | 行为 |
+|---|---|---|
+| `/mnemosyne/diagnose` | GET | 探测 CLI + 确保 dataDir + 跑 stats，返回结构化报告 |
+| `/mnemosyne/setup` | POST | 检测/安装 CLI（uv tool install） |
+| `/mnemosyne/test` | POST | store 探针记忆 → delete，验证闭环 |
+| `/mnemosyne/config` | GET | 读取 dataDir/config.yaml 的 memory.mnemosyne 段 |
+| `/mnemosyne/config` | POST | 写入 dataDir/config.yaml 的 memory.mnemosyne 段（auto_sleep / sleep_threshold / ignore_patterns） |
+
+### 10.6 会话收尾自动 sleep
+
+`apply` 通过 `ctx.on("session/event", ...)` 监听 `turn/end` 事件。当 `config.yaml` 的 `auto_sleep` 为 true 且工作记忆条目数 ≥ `sleep_threshold` 时，自动调用 `mnemosyne sleep` 整合记忆。读取 `config.yaml`（而非 DSH settings）作为事实源，使面板编辑即时生效无需重启。失败静默跳过，不干扰会话。
 
 ## 11. 后续可选增强
 
-- 面板内嵌完整配置表单（当前依赖 DSH settings 自动表单）；
-- `autoSleep`/`sleepThreshold`/`ignorePatterns` 写入 `config.yaml` 的 host RPC；
-- 自定义工具卡片（`tool.call.toolview` slot）— 文本输出暂无需；
-- 会话收尾自动 `mnemosyne_sleep`（agent loop 事件钩子）；
 - 去 CLI 化直连 SQLite — 与上游架构冲突，除非上游 API 变动否则不考虑。

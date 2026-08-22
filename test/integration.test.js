@@ -27,6 +27,7 @@ function createMockCtx() {
   const ctx = {
     get: () => undefined, // no skills service in the minimal host
     effect: (fn) => fn(),
+    on: () => () => {},
     inject: (deps, fn) => {
       if (deps[0] === "tools") {
         fn({ effect: (fn) => fn(), tools: { register: (def) => (tools.push(def), () => {}) } });
