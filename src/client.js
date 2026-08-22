@@ -216,6 +216,8 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-field-right{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}' +
     '.mn-field-head{align-items:center;gap:8px;display:flex}' +
     '.mn-label{min-width:0;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}' +
+    '.mn-help{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--dsw-alias-label-dimmed);color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:600;line-height:1;cursor:help;flex:none;user-select:none}' +
+    '.mn-help:hover,.mn-help:focus-visible{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);outline:none}' +
     '.mn-toggle{display:flex;align-items:center;gap:10px;width:100%;padding-top:6px}' +
     '.mn-check{width:16px;height:16px;accent-color:var(--dsw-alias-brand-primary);cursor:pointer;margin:0}' +
     '.mn-input{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);min-height:34px;font:inherit;color:var(--dsw-alias-label-primary);border-radius:8px;padding:6px 12px;font-size:13px;line-height:1.5;width:100%;box-sizing:border-box;max-width:420px}' +
@@ -395,15 +397,19 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const renderField = (f) => {
       const val = format(f.key);
       const isOverridden = f.key in drafts;
+      // Tooltip icon: ? with hover text for the field hint
+      const hintIcon = f.hint
+        ? h("span", { className: "mn-help", title: t(f.hint), tabIndex: 0 }, "?")
+        : null;
       // Toggle: label on left, checkbox on right — same row
       if (f.type === "toggle") {
         return h("div", { className: "mn-field", key: f.key },
           h("div", { className: "mn-field-left" },
             h("div", { className: "mn-field-head" },
               h("span", { className: "mn-label" }, t(f.label)),
+              hintIcon,
               isOverridden ? h("button", { type: "button", className: "mn-btn", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => resetField(f.key) }, t("reset")) : null,
             ),
-            f.hint ? h("p", { className: "mn-hint" }, t(f.hint)) : null,
           ),
           h("div", { className: "mn-field-right", style: { paddingTop: 8 } },
             h("input", { type: "checkbox", className: "mn-check", checked: val === true, onChange: (e) => setDraft(f.key, e.target.checked) }),
@@ -421,9 +427,9 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         h("div", { className: "mn-field-left" },
           h("div", { className: "mn-field-head" },
             h("span", { className: "mn-label" }, t(f.label)),
+            hintIcon,
             isOverridden ? h("button", { type: "button", className: "mn-btn", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => resetField(f.key) }, t("reset")) : null,
           ),
-          f.hint ? h("p", { className: "mn-hint" }, t(f.hint)) : null,
         ),
         h("div", { className: "mn-field-right" },
           f.type === "area" ? h("textarea", inputProps) : h("input", { type: inputType, ...inputProps }),
