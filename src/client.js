@@ -205,6 +205,26 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
   const FIELD_TO_YAML = {};
   for (const f of FIELDS) if (f.yaml) FIELD_TO_YAML[f.key] = f.yaml;
 
+  // mnemosyne upstream defaults for placeholder display (camelCase → value)
+  const FIELD_DEFAULTS = {
+    noEmbeddings: false,
+    embeddingModel: "BAAI/bge-small-en-v1.5",
+    embeddingDim: 384,
+    embeddingApiUrl: "",
+    embeddingApiKey: "",
+    llmEnabled: false,
+    llmBaseUrl: "",
+    llmApiKey: "",
+    llmModel: "",
+    llmTimeout: 60,
+    polyphonicRecall: false,
+    wmMaxItems: 10000,
+    wmTtlHours: 168,
+    autoSleep: true,
+    sleepThreshold: 20,
+    ignorePatterns: "",
+  };
+
   // ── Styles: DSH design tokens (mirrors dsh-vision-router) ──────────────
   const CSS =
     '.mn-card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none;transition:border-color .16s,background .16s;margin-bottom:12px}' +
@@ -235,6 +255,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-input{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);min-height:34px;font:inherit;color:var(--dsw-alias-label-primary);border-radius:8px;padding:6px 12px;font-size:13px;line-height:1.5;width:100%;box-sizing:border-box;max-width:420px}' +
     '.mn-input:focus-visible{border-color:var(--dsw-alias-brand-primary);outline:none}' +
     '.mn-input:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}' +
+    '.mn-input::placeholder{color:var(--dsw-alias-label-dimmed);opacity:.7}' +
     '.mn-area{resize:vertical;min-height:60px;font-family:monospace}' +
     '.mn-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}' +
     '.mn-card-hint{color:var(--dsw-alias-label-tertiary);margin:0 0 8px;font-size:12px;line-height:1.6;padding:0 16px}' +
@@ -331,20 +352,25 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       ? snapshot.value
       : (snapshot.base && typeof snapshot.base === "object") ? snapshot.base : {};
 
-    // Format a field value: config.yaml fields read from /mnemosyne/config
-    // (already typed: boolean/number/string from host parseYamlScalar),
-    // dsh-only fields (cli, defaultTopK, timeoutMs) read from settings scope.
+    // Format a field's current value: config.yaml fields read from
+    // /mnemosyne/config, dsh-only fields from settings scope.
+    // Returns "" for empty values — defaults show via placeholder instead.
     const format = (key) => {
       if (key in drafts) return drafts[key];
       const f = FIELDS.find((x) => x.key === key);
       if (f && f.yaml) {
         const v = yamlConfig[f.yaml];
-        if (v !== undefined && v !== null) return v;
-        // config.yaml has no value — fall back to settings scope default
-        return stored[key] ?? (f.type === "toggle" ? false : "");
+        if (v !== undefined && v !== null && v !== "") return v;
+        return ""; // empty → show placeholder
       }
       const v = stored[key];
       return v === undefined ? "" : v;
+    };
+    // Placeholder text showing the default value for non-toggle fields.
+    const placeholder = (key) => {
+      const def = FIELD_DEFAULTS[key];
+      if (def === undefined || def === "") return "";
+      return String(def);
     };
     const isDirty = Object.keys(drafts).length > 0;
     const setDraft = (key, value) => { setDrafts((d) => ({ ...d, [key]: value })); setFailedFields([]); };
@@ -446,6 +472,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       const inputProps = {
         className: "mn-input" + (f.type === "area" ? " mn-area" : ""),
         value: val,
+        placeholder: placeholder(f.key) || undefined,
         onChange: (e) => setDraft(f.key, f.type === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value),
       };
       if (f.type === "area") inputProps.rows = 3;
@@ -465,7 +492,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
 
     // ── Card builder: each card is a collapsible <li> ─────────────────────
     const renderCard = (cardKey, cardTitle, isOpen, children, cardHint) => {
-      const openState = cardOpen[cardKey] ?? true;
+      const openState = cardOpen[cardKey] ?? false;
       return h("li", { className: "mn-card" + (openState ? " mn-card-open" : ""), key: cardKey },
         h("button", {
           type: "button", className: "mn-header", "aria-expanded": openState,
