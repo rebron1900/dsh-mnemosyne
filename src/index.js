@@ -268,7 +268,27 @@ export const CONFIG_YAML_MAP = {
   ignorePatterns: "ignore_patterns",
 };
 
-/** Parse a flat `key: value` YAML file into { key: value } object. */
+/** Parse a YAML scalar string into a JS value: strips quotes, coerces numbers/bools/null. */
+function parseYamlScalar(raw) {
+  const s = raw.trim();
+  if (s === "") return "";
+  // Double-quoted
+  if (s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1).replace(/\\"/g, '"');
+  // Single-quoted (YAML: '' = escaped single quote)
+  if (s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1).replace(/''/g, "'");
+  // Boolean
+  if (s === "true") return true;
+  if (s === "false") return false;
+  // Null
+  if (s === "null" || s === "~") return null;
+  // Number
+  if (/^-?\d+$/.test(s)) return parseInt(s, 10);
+  if (/^-?\d+\.\d+$/.test(s)) return parseFloat(s);
+  // Bare string
+  return s;
+}
+
+/** Parse a flat `key: value` YAML file into { key: value } object with typed values. */
 export function readMnemosyneConfigYaml(dataDir) {
   const p = join(dataDir, "config.yaml");
   if (!existsSync(p)) return {};
@@ -277,7 +297,7 @@ export function readMnemosyneConfigYaml(dataDir) {
   for (const line of raw.split("\n")) {
     if (!line || line.startsWith("#")) continue;
     const m = line.match(/^(\w+):\s*(.*)$/);
-    if (m) result[m[1]] = m[2];
+    if (m) result[m[1]] = parseYamlScalar(m[2]);
   }
   return result;
 }
@@ -298,14 +318,6 @@ export function writeMnemosyneConfigYaml(dataDir, values) {
   }
   writeFileSync(p, raw, "utf8");
   return { ok: true, path: p };
-}
-
-/** Parse value string from config.yaml into the right JS type for a given field type. */
-export function parseYamlValue(raw, type) {
-  if (raw === undefined || raw === "") return type === "toggle" ? false : (type === "number" ? undefined : "");
-  if (type === "toggle") return raw === "true" || raw === true;
-  if (type === "number") { const n = Number(raw); return Number.isFinite(n) ? n : undefined; }
-  return String(raw);
 }
 
 export function apply(ctx, config) {

@@ -324,23 +324,17 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       ? snapshot.value
       : (snapshot.base && typeof snapshot.base === "object") ? snapshot.base : {};
 
-    // Format a field value: config.yaml fields read from /mnemosyne/config,
+    // Format a field value: config.yaml fields read from /mnemosyne/config
+    // (already typed: boolean/number/string from host parseYamlScalar),
     // dsh-only fields (cli, defaultTopK, timeoutMs) read from settings scope.
     const format = (key) => {
       if (key in drafts) return drafts[key];
       const f = FIELDS.find((x) => x.key === key);
       if (f && f.yaml) {
-        const raw = yamlConfig[f.yaml];
-        if (raw != null && raw !== "") {
-          if (f.type === "toggle") return raw === "true" || raw === true;
-          if (f.type === "number") { const n = Number(raw); return Number.isFinite(n) ? n : ""; }
-          return String(raw);
-        }
+        const v = yamlConfig[f.yaml];
+        if (v !== undefined && v !== null) return v;
         // config.yaml has no value — fall back to settings scope default
-        const fallback = stored[key];
-        if (f.type === "toggle") return fallback ?? false;
-        if (f.type === "number") return fallback ?? "";
-        return fallback ?? "";
+        return stored[key] ?? (f.type === "toggle" ? false : "");
       }
       const v = stored[key];
       return v === undefined ? "" : v;
