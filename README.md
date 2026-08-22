@@ -1,61 +1,63 @@
 # dsh-mnemosyne
 
-> [Mnemosyne](https://github.com/mnemosyne-oss/mnemosyne) 记忆层在 [DeepSeek Harness](https://github.com/deepseek-ai) 中的插件 — 本地优先、SQLite 支持的跨会话记忆。
+English | [简体中文](./README.zh-CN.md)
 
-## 关于 Mnemosyne
+> A [DeepSeek Harness](https://github.com/deepseek-ai) plugin for [Mnemosyne](https://github.com/mnemosyne-oss/mnemosyne) — local-first, SQLite-backed cross-session memory.
 
-[Mnemosyne](https://github.com/mnemosyne-oss/mnemosyne) 是一个零云依赖、SQLite 支持的本地优先 AI 记忆系统。一个 `pip install`，一个 SQLite 文件，无需外部服务。它采用 **BEAM**（Bilevel Episodic-Associative Memory）架构：
+## About Mnemosyne
 
-- **工作记忆**（Working Memory）— 热上下文层，自动注入 LLM 调用前，基于 TTL 淘汰
-- **情景记忆**（Episodic Memory）— 长期存储，sqlite-vec + FTS5 混合检索（50% 向量相似度 + 30% FTS5 排序 + 20% 重要性）
-- **知识三元组**（TripleStore）— 带版本链的时序知识图谱
+[Mnemosyne](https://github.com/mnemosyne-oss/mnemosyne) is a zero-cloud, SQLite-backed, local-first AI memory system. One `pip install`, one SQLite file, no external services required. It uses a **BEAM** (Bilevel Episodic-Associative Memory) architecture:
 
-Mnemosyne 支持 MCP、Python SDK 及多种 agent 框架（Claude Code、Cursor、Codex、OpenWebUI、Pi 等）。本插件是其在 DSH 中的集成。
+- **Working Memory** — Hot context tier, auto-injected before LLM calls, TTL-based eviction
+- **Episodic Memory** — Long-term storage with sqlite-vec + FTS5 hybrid search (50% vector similarity + 30% FTS5 rank + 20% importance)
+- **TripleStore** — Temporal knowledge graph with version chains
 
-## 关于 Pi-mnemosyne
+Mnemosyne supports MCP, Python SDK, and multiple agent frameworks (Claude Code, Cursor, Codex, OpenWebUI, Pi, etc.). This plugin integrates it into DSH.
 
-本插件移植自 [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mnemosyne-oss/pi-mnemosyne) — Mnemosyne 官方的 [Pi coding agent](https://pi.dev/) 扩展。Pi-mnemosyne 本身不含任何记忆逻辑：所有能力都在 `mnemosyne` CLI（`pip install mnemosyne-memory`）里，插件只做"工具 schema ↔ CLI 参数"的无状态代理。移植到 DSH 时保持这一架构不变，并增加了设置面板、CLI 自动安装、配置管理和会话收尾自动整合。
+## About Pi-mnemosyne
 
-## 功能
+This plugin is ported from [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mnemosyne-oss/pi-mnemosyne) — the official [Pi coding agent](https://pi.dev/) extension for Mnemosyne. Pi-mnemosyne contains no memory logic itself: all capabilities live in the `mnemosyne` CLI (`pip install mnemosyne-memory`), and the plugin acts as a stateless proxy between tool schemas and CLI arguments. The port to DSH preserves this architecture while adding a settings panel, automatic CLI installation, config management, and turn-end auto-consolidation.
 
-- **五个原生工具**：`mnemosyne_remember` / `mnemosyne_recall` / `mnemosyne_forget` / `mnemosyne_stats` / `mnemosyne_sleep`
-- **内嵌技能**：`mnemosyne` 技能随插件自动注册，指导 agent 何时存储/检索记忆
-- **设置面板**：DSH Settings 左侧独立 "Mnemosyne" 入口，含 CLI 状态、记忆统计、一键安装/测试、配置表单
-- **自动安装 CLI**：面板 Setup 按钮用 `uv tool install mnemosyne-memory` 自动装好，并补齐 `config.yaml` 默认值
-- **数据隔离**：SQLite 库与 `config.yaml` 存于 `~/.dsh/mnemosyne`，不碰 `~/.hermes`
-- **配置同步**：面板从扁平的 `config.yaml` 读取 mnemosyne 实际配置，空值字段显示默认值 placeholder；保存后自动执行 `mnemosyne config reload`
-- **默认值恢复**：面板底部支持将面板管理的配置恢复为 mnemosyne 默认值
-- **自动整理**：每次 `turn/end` 检查工作记忆数量，达到阈值时自动执行 `mnemosyne sleep`
+## Features
 
-## 安装
+- **Five native tools**: `mnemosyne_remember` / `mnemosyne_recall` / `mnemosyne_forget` / `mnemosyne_stats` / `mnemosyne_sleep`
+- **Embedded skill**: The `mnemosyne` skill auto-registers with the plugin, guiding agents on when to store/retrieve memories
+- **Settings panel**: A dedicated "Mnemosyne" entry in DSH Settings with CLI status, memory stats, one-click install/test, and a config form
+- **Auto-install CLI**: The panel's Setup button runs `uv tool install mnemosyne-memory` and fills `config.yaml` defaults
+- **Data isolation**: SQLite DB and `config.yaml` live under `~/.dsh/mnemosyne`, never touching `~/.hermes`
+- **Config sync**: The panel reads actual values from the flat `config.yaml`; empty fields show default placeholders; saving triggers `mnemosyne config reload`
+- **Reset to defaults**: The panel footer resets all managed config keys to Mnemosyne upstream defaults
+- **Auto-consolidation**: On each `turn/end`, checks working memory count and runs `mnemosyne sleep` when the threshold is met
+
+## Installation
 
 ```bash
 dsh plugin --profile web add dsh-mnemosyne
-# 重启 profile 后，打开 Settings > Mnemosyne，点 Setup 自动安装 CLI
-# 或手动：uv tool install mnemosyne-memory
+# After restarting the profile, open Settings > Mnemosyne and click Setup to install the CLI
+# Or manually: uv tool install mnemosyne-memory
 ```
 
-> Setup 按钮需要 PATH 上有 `uv`。如果尚未安装 uv：
+> The Setup button requires `uv` on PATH. If you don't have uv yet:
 > ```bash
 > curl -LsSf https://astral.sh/uv/install.sh | sh
 > ```
 
-## 配置
+## Configuration
 
-配置有两个来源：插件自身的 DSH settings（`~/.dsh/settings.yaml` 的 `mnemosyne:` 命名空间）以及 mnemosyne 的扁平 `~/.dsh/mnemosyne/config.yaml`。面板优先显示 config.yaml 中的实际值；缺少值时显示默认值 placeholder。
+Configuration comes from two sources: the plugin's own DSH settings (`~/.dsh/settings.yaml` under the `mnemosyne:` namespace) and Mnemosyne's flat `~/.dsh/mnemosyne/config.yaml`. The panel shows config.yaml values first; missing values display default placeholders.
 
-| 分组 | 字段 | 配置来源 |
-|------|------|----------|
-| 插件 | `cli` / `defaultTopK` / `timeoutMs` / `dataDir` | DSH settings / `cordis.patch.yml` |
+| Group | Fields | Source |
+|-------|--------|--------|
+| Plugin | `cli` / `defaultTopK` / `timeoutMs` / `dataDir` | DSH settings / `cordis.patch.yml` |
 | Embedding | `noEmbeddings` / `embeddingModel` / `embeddingDim` / `embeddingApiUrl` / `embeddingApiKey` | config.yaml `no_embeddings` / `embedding_*` |
 | LLM | `llmEnabled` / `llmBaseUrl` / `llmApiKey` / `llmModel` / `llmTimeout` | config.yaml `llm_*` |
-| 召回 | `polyphonicRecall` | config.yaml `polyphonic_recall` |
-| 工作记忆 | `wmMaxItems` / `wmTtlHours` | config.yaml `wm_*` |
-| 工作记忆 | `autoSleep` / `sleepThreshold` / `ignorePatterns` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` |
+| Recall | `polyphonicRecall` | config.yaml `polyphonic_recall` |
+| Working Memory | `wmMaxItems` / `wmTtlHours` | config.yaml `wm_*` |
+| Working Memory | `autoSleep` / `sleepThreshold` / `ignorePatterns` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` |
 
-面板保存会写入对应配置文件，并执行 `mnemosyne config reload`。底部"恢复默认配置"会将面板管理的配置恢复为 mnemosyne 默认值；更多未展示的配置可以直接编辑 `~/.dsh/mnemosyne/config.yaml`。除 `vec_type` 等启动时确定的配置外，大部分配置支持热加载。
+Saving writes to the corresponding config file and runs `mnemosyne config reload`. "Reset to Defaults" restores all panel-managed keys to Mnemosyne upstream defaults; additional config can be edited directly in `~/.dsh/mnemosyne/config.yaml`. Most settings hot-reload except `vec_type` and other startup-bound options.
 
-## 架构
+## Architecture
 
 ```
 ┌──────────────────────────────────────┐
@@ -79,17 +81,17 @@ dsh plugin --profile web add dsh-mnemosyne
 └──────────────────────────────────────┘
 ```
 
-插件本身不含记忆逻辑——它是 DSH 工具 schema 到 `mnemosyne` CLI 参数的无状态代理，与 Pi-mnemosyne 保持一致的架构。
+The plugin itself contains no memory logic — it's a stateless proxy from DSH tool schemas to `mnemosyne` CLI arguments, consistent with the Pi-mnemosyne architecture.
 
-## 设计与实现方案
+## Design Document
 
-见 [docs/design.md](docs/design.md)。
+See [docs/design.md](docs/design.md).
 
-## 开发
+## Development
 
 ```bash
 pnpm install
-pnpm test        # node --test（36 例：单元 + 集成 + client）
+pnpm test        # node --test (36 tests: unit + integration + client)
 ```
 
 ## License
