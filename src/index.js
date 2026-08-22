@@ -5,6 +5,23 @@ import { homedir } from "node:os";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import z from "@deepseek-ai/schemastery";
 
+// --- small HTTP helpers for the panel's webServer routes ---
+function sendJson(res, status, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  res.end(payload);
+}
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true; // same-origin browser navigations omit Origin
+  try {
+    const u = new URL(origin);
+    return u.host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * dsh-mnemosyne — DeepSeek Harness profile bundle for Mnemosyne.
  *
@@ -213,8 +230,20 @@ const TEXT_OUTPUT = {
 export function apply(ctx, config) {
   const cfg = () => config ?? {};
   const env = () => buildEnv(cfg());
+  // Resolve the CLI path once (checks PATH + uv tools dir). Tools and panel
+  // routes all go through this so they share one resolution path.
+  const resolveCliPath = () => {
+    const cli = resolveCli(cfg().cli ?? "mnemosyne");
+    if (!cli) {
+      throw new Error(
+        "Mnemosyne CLI '" + (cfg().cli ?? "mnemosyne") + "' not found on PATH. " +
+        "Install it via the Mnemosyne panel (Setup) or run: uv tool install mnemosyne-memory"
+      );
+    }
+    return cli;
+  };
   const run = (command, args) =>
-    runMnemosyne(cfg().cli ?? "mnemosyne", command, args, cfg().timeoutMs ?? 20_000, env());
+    runMnemosyne(resolveCliPath(), command, args, cfg().timeoutMs ?? 20_000, env());
 
   // Persist config into the DSH settings namespace when the settings service is
   // available (web profile). Headless/minimal hosts keep using entry config.
@@ -223,27 +252,65 @@ export function apply(ctx, config) {
     ctx.effect(() => settings.register("mnemosyne", Config, { base: cfg() }), "mnemosyne: settings namespace");
   }
 
-  // Host RPC handlers used by the client panel (Client→Host JSON RPC).
-  const harness = ctx.get("harness");
-  if (harness && typeof harness.handle === "function") {
-    ctx.effect(() => harness.handle("mnemosyne.setup", () => setupMnemosyne()), "mnemosyne: setup rpc");
-    ctx.effect(() => harness.handle("mnemosyne.diagnose", () => diagnoseMnemosyne(cfg())), "mnemosyne: diagnose rpc");
-    ctx.effect(
-      () =>
-        harness.handle("mnemosyne.testConnection", async () => {
+  // HTTP routes for the client panel (Client→Host via fetch). Soft-dep on
+  // webServer: headless/minimal hosts without a server simply skip these.
+  ctx.inject(["webServer"], (hostCtx) => {
+    const web = hostCtx.webServer;
+    const disposers = [];
+
+    disposers.push(
+      web.register({
+        kind: "exact",
+        path: "/mnemosyne/diagnose",
+        handler: async (req, res) => {
+          if (req.method !== "GET") return sendJson(res, 405, { error: "GET only" });
+          try {
+            sendJson(res, 200, await diagnoseMnemosyne(cfg()));
+          } catch (e) {
+            sendJson(res, 500, { error: String(e?.message ?? e) });
+          }
+        },
+      })
+    );
+
+    disposers.push(
+      web.register({
+        kind: "exact",
+        path: "/mnemosyne/setup",
+        handler: async (req, res) => {
+          if (req.method !== "POST") return sendJson(res, 405, { error: "POST only" });
+          if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
+          try {
+            sendJson(res, 200, await setupMnemosyne());
+          } catch (e) {
+            sendJson(res, 500, { error: String(e?.message ?? e) });
+          }
+        },
+      })
+    );
+
+    disposers.push(
+      web.register({
+        kind: "exact",
+        path: "/mnemosyne/test",
+        handler: async (req, res) => {
+          if (req.method !== "POST") return sendJson(res, 405, { error: "POST only" });
+          if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
           try {
             const marker = `dsh-conn-test-${Date.now()}`;
             const stored = await run("store", storeArgs({ content: marker, source: "dsh-panel" }));
             const id = stored.split("Stored:")[1]?.trim();
             if (id) await run("delete", [id]);
-            return { ok: true, message: "store + delete succeeded", probeId: id ?? null };
+            sendJson(res, 200, { ok: true, message: "store + delete succeeded", probeId: id ?? null });
           } catch (e) {
-            return { ok: false, error: String(e?.message ?? e) };
+            sendJson(res, 200, { ok: false, error: String(e?.message ?? e) });
           }
-        }),
-      "mnemosyne: testConnection rpc"
+        },
+      })
     );
-  }
+
+    hostCtx.effect(() => () => disposers.forEach((d) => d?.()), "mnemosyne: http routes");
+  });
 
   ctx.inject(["tools"], (sctx) => {
     sctx.effect(

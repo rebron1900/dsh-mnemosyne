@@ -25,13 +25,15 @@ let savedEnv;
 function createMockCtx() {
   const tools = [];
   const ctx = {
-    get: () => undefined, // no skills service in the minimal host
+    get: () => undefined, // no skills/settings/harness service in the minimal host
     effect: (fn) => fn(),
-    inject: (_deps, fn) =>
-      fn({
-        effect: (fn) => fn(),
-        tools: { register: (def) => (tools.push(def), () => {}) },
-      }),
+    inject: (deps, fn) => {
+      if (deps[0] === "tools") {
+        fn({ effect: (fn) => fn(), tools: { register: (def) => (tools.push(def), () => {}) } });
+      } else if (deps[0] === "webServer") {
+        fn({ webServer: { register: () => () => {} }, effect: (fn) => fn() });
+      }
+    },
   };
   return { ctx, tools };
 }

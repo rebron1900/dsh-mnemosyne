@@ -22,14 +22,17 @@ function createMockCtx() {
     get: (key) => (key === "skills" ? { register: (s) => skills.push(s) } : undefined),
     effect: (fn) => effects.push(fn()),
     inject: (deps, fn) => {
-      assert.deepEqual(deps, ["tools"]);
-      fn({
-        effect: (fn) => {
-          effects.push(fn());
-          return () => {};
-        },
-        tools: { register: (def) => (tools.push(def), () => {}) },
-      });
+      if (deps[0] === "tools") {
+        fn({
+          effect: (fn) => { effects.push(fn()); return () => {}; },
+          tools: { register: (def) => (tools.push(def), () => {}) },
+        });
+      } else if (deps[0] === "webServer") {
+        fn({
+          webServer: { register: () => () => {} },
+          effect: (fn) => { effects.push(fn()); return () => {}; },
+        });
+      }
     },
   };
   return { ctx, tools, skills };

@@ -41,7 +41,7 @@ describe("client module", () => {
     assert.equal(typeof mod.apply, "function");
     assert.equal(typeof mod.name, "string");
     assert.ok(Array.isArray(mod.inject));
-    assert.ok(mod.inject.includes("slots"));
+    assert.deepEqual(mod.inject, ["slots", "locale"]);
   });
 
   it("apply registers a locale dictionary and a settings.section slot", () => {
