@@ -2,54 +2,46 @@
 
 > [Mnemosyne](https://github.com/mnemosyne-oss/mnemosyne) 记忆层在 [DeepSeek Harness](https://github.com/deepseek-ai) 中的插件 — 本地优先、SQLite 支持的跨会话记忆。
 
-`dsh-mnemosyne` 是 [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mnemosyne-oss/Pi-mnemosyne) 的 DSH 移植版：把 remember / recall / forget / stats / sleep 五个记忆工具和一个 agent 技能注册进 DSH profile，全部操作代理到本地 `mnemosyne` CLI。
+`dsh-mnemosyne` 把 remember / recall / forget / stats / sleep 五个记忆工具和一个 agent 技能注册进 DSH profile，并提供设置面板。所有数据与配置落在 `~/.dsh/mnemosyne`。
 
 ## 功能
 
 - **五个原生工具**：`mnemosyne_remember` / `mnemosyne_recall` / `mnemosyne_forget` / `mnemosyne_stats` / `mnemosyne_sleep`
-- **内嵌技能**：`mnemosyne` 技能随插件自动注册（runtime skill），无需复制文件
-- **本地优先**：数据全部留在本机 SQLite，无云、无 API key
-- **零配置**：装完即用；`cli` / `defaultTopK` / `timeoutMs` 可通过组合配置覆盖
-
-## 前置条件
-
-```bash
-pip install mnemosyne-memory   # 提供 mnemosyne CLI
-```
+- **内嵌技能**：`mnemosyne` 技能随插件自动注册
+- **设置面板**：DSH Settings 左侧独立 "Mnemosyne" 入口，含 CLI 状态、记忆统计、一键安装/测试
+- **自动安装 CLI**：面板 Setup 按钮用 `uv tool install mnemosyne-memory` 自动装好
+- **数据隔离**：SQLite 库与 `config.yaml` 存于 `~/.dsh/mnemosyne`，不碰 `~/.hermes`
+- **配置透传**：embedding 模型/维度、LLM 后端、召回调优、工作记忆阈值等通过环境变量透传给 CLI
 
 ## 安装
 
 ```bash
 dsh plugin --profile web add dsh-mnemosyne
-# 重启 profile 生效
+# 重启 profile 后，打开 Settings > Mnemosyne，点 Setup 自动安装 CLI
+# 或手动：uv tool install mnemosyne-memory
 ```
 
-开发期本地链接：
+## 配置
 
-```bash
-cd ~/workspace/projects/active/dsh-mnemosyne
-dsh plugin --profile web add ./.
-```
+配置通过 DSH settings（`~/.dsh/settings.yaml` 的 `mnemosyne:` 命名空间）或 profile 的 `cordis.patch.yml` 覆盖。面板字段对应 `Config` schema：
 
-## 工具
-
-| 工具 | 用途 | CLI 映射 |
-|------|------|----------|
-| `mnemosyne_remember` | 存储一条记忆（可带 source / importance） | `mnemosyne store <content> [source] [importance]` |
-| `mnemosyne_recall` | 按语义相似度检索记忆 | `mnemosyne recall <query> <top_k>` |
-| `mnemosyne_forget` | 按 ID 删除记忆 | `mnemosyne delete <id>` |
-| `mnemosyne_stats` | 查看数据库统计 | `mnemosyne stats` |
-| `mnemosyne_sleep` | 整合压缩旧记忆为长期摘要 | `mnemosyne sleep` |
+| 分组 | 字段 | 透传给 |
+|------|------|--------|
+| 插件 | `cli` / `defaultTopK` / `timeoutMs` / `dataDir` | dataDir → `MNEMOSYNE_DATA_DIR` |
+| Embedding | `noEmbeddings` / `embeddingModel` / `embeddingDim` / `embeddingApiUrl` / `embeddingApiKey` | `MNEMOSYNE_*` |
+| LLM | `llmEnabled` / `llmBaseUrl` / `llmApiKey` / `llmModel` / `llmTimeout` | `MNEMOSYNE_LLM_*` |
+| 召回 | `polyphonicRecall` | `MNEMOSYNE_POLYPHONIC_RECALL` |
+| 工作记忆 | `wmMaxItems` / `wmTtlHours` / `autoSleep` / `sleepThreshold` / `ignorePatterns` | env / config.yaml |
 
 ## 设计与实现方案
 
-完整分析（Pi-mnemosyne 走读、DSH 扩展体系、概念映射与实现决策）见 [docs/design.md](docs/design.md)。
+见 [docs/design.md](docs/design.md)。
 
 ## 开发
 
 ```bash
 pnpm install
-pnpm test        # node --test
+pnpm test        # node --test（24 例：单元 + 集成 + client）
 ```
 
 ## License

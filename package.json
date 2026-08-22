@@ -1,7 +1,7 @@
 {
   "name": "dsh-mnemosyne",
-  "version": "0.1.0",
-  "description": "Mnemosyne memory for DeepSeek Harness: remember / recall / forget / stats / sleep tools plus an embedded agent skill, proxied to the local mnemosyne CLI.",
+  "version": "0.2.0",
+  "description": "Mnemosyne memory for DeepSeek Harness: remember / recall / forget / stats / sleep tools, embedded skill, auto-setup, and a Settings panel. Data lives under ~/.dsh/mnemosyne.",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -15,6 +15,7 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./client": "./src/client.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -33,7 +34,8 @@
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6"
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-settings": ">=0.1.0-rc.6"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6"
@@ -41,6 +43,15 @@
   "dsh": {
     "bundle": {
       "patch": "cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
     }
   }
 }

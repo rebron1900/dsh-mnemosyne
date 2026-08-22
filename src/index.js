@@ -1,29 +1,82 @@
 import { execFile } from "node:child_process";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, mkdirSync } from "node:fs";
+import { join, resolve as resolvePath } from "node:path";
+import { homedir } from "node:os";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import z from "@deepseek-ai/schemastery";
 
 /**
  * dsh-mnemosyne — DeepSeek Harness profile bundle for Mnemosyne.
  *
- * Registers five agent tools that proxy to the `mnemosyne` CLI
- * (pip install mnemosyne-memory), plus one embedded runtime skill:
- *   - mnemosyne_remember  → mnemosyne store <content> [source] [importance]
- *   - mnemosyne_recall    → mnemosyne recall <query> [top_k]
- *   - mnemosyne_forget    → mnemosyne delete <id>
- *   - mnemosyne_stats     → mnemosyne stats
- *   - mnemosyne_sleep     → mnemosyne sleep
+ * Registers five agent tools that proxy to the `mnemosyne` CLI, plus one
+ * embedded runtime skill. All data and config land under ~/.dsh/mnemosyne.
+ * The CLI is auto-installed via `uv tool install mnemosyne-memory` when the
+ * panel's setup action runs.
  */
 
 export const name = "mnemosyne";
 
 export const inject = ["tools"];
 
+export const DEFAULT_DATA_DIR = join(homedir(), ".dsh", "mnemosyne");
+
 export const Config = z.object({
-  cli: z.string().default("mnemosyne").description("Mnemosyne CLI executable."),
+  // --- plugin behaviour ---
+  cli: z.string().default("mnemosyne").description("Mnemosyne CLI executable (name on PATH or absolute path)."),
   defaultTopK: z.number().default(5).description("Recall cap when the model omits top_k."),
   timeoutMs: z.number().default(20_000).description("Per-call CLI timeout in milliseconds."),
+  dataDir: z.string().default(DEFAULT_DATA_DIR).description("Where mnemosyne stores its SQLite DB and config.yaml."),
+
+  // --- embedding ---
+  noEmbeddings: z.boolean().default(false).description("Disable semantic embeddings (keyword/FTS5 only)."),
+  embeddingModel: z.string().description("Embedding model id, e.g. BAAI/bge-small-zh-v1.5. Changing requires reindex."),
+  embeddingDim: z.number().description("Explicit embedding output dimension; leave unset for built-in model mappings."),
+  embeddingApiUrl: z.string().description("Custom embedding API endpoint (falls back to OPENROUTER_BASE_URL)."),
+  embeddingApiKey: z.string().role("secret").description("Embedding API key (falls back to OPENROUTER_API_KEY / OPENAI_API_KEY)."),
+
+  // --- LLM consolidation ---
+  llmEnabled: z.boolean().default(true).description("Global gate for LLM-backed consolidation."),
+  llmBaseUrl: z.string().description("OpenAI-compatible API base URL for remote LLM consolidation."),
+  llmApiKey: z.string().role("secret").description("API key for the remote LLM endpoint."),
+  llmModel: z.string().description("Remote LLM model id."),
+  llmTimeout: z.number().default(60).description("HTTP timeout in seconds for remote LLM calls."),
+
+  // --- recall tuning ---
+  polyphonicRecall: z.boolean().default(false).description("Route recall through PolyphonicRecallEngine (better phrasing tolerance, cross-scope risk on shared banks)."),
+
+  // --- working memory / sleep ---
+  wmMaxItems: z.number().description("Max unconsolidated working-memory items before eviction."),
+  wmTtlHours: z.number().description("TTL in hours for unconsolidated working-memory entries."),
+  autoSleep: z.boolean().default(true).description("Auto-run sleep consolidation on session start/end (config.yaml)."),
+  sleepThreshold: z.number().default(20).description("Min working-memory entries before auto-sleep triggers (config.yaml)."),
+  ignorePatterns: z.array(z.string()).description("Regex patterns filtering content before storage (config.yaml)."),
 });
+
+/**
+ * Build the environment passed to the mnemosyne CLI. Only non-empty/non-default
+ * fields are injected, so a user's own MNEMOSYNE_* env wins for anything we
+ * leave undefined. dataDir is always set (it is the plugin's core contract).
+ */
+export function buildEnv(config, base = process.env) {
+  const c = config ?? {};
+  const env = { ...base };
+  // data dir is always pinned to the plugin's contract (~/.dsh/mnemosyne)
+  env.MNEMOSYNE_DATA_DIR = c.dataDir ?? DEFAULT_DATA_DIR;
+  if (c.noEmbeddings) env.MNEMOSYNE_NO_EMBEDDINGS = "1";
+  if (c.embeddingModel) env.MNEMOSYNE_EMBEDDING_MODEL = c.embeddingModel;
+  if (c.embeddingDim != null) env.MNEMOSYNE_EMBEDDING_DIM = String(c.embeddingDim);
+  if (c.embeddingApiUrl) env.MNEMOSYNE_EMBEDDING_API_URL = c.embeddingApiUrl;
+  if (c.embeddingApiKey) env.MNEMOSYNE_EMBEDDING_API_KEY = c.embeddingApiKey;
+  if (c.llmEnabled === false) env.MNEMOSYNE_LLM_ENABLED = "false";
+  if (c.llmBaseUrl) env.MNEMOSYNE_LLM_BASE_URL = c.llmBaseUrl;
+  if (c.llmApiKey) env.MNEMOSYNE_LLM_API_KEY = c.llmApiKey;
+  if (c.llmModel) env.MNEMOSYNE_LLM_MODEL = c.llmModel;
+  if (c.llmTimeout != null) env.MNEMOSYNE_LLM_TIMEOUT = String(c.llmTimeout);
+  if (c.polyphonicRecall) env.MNEMOSYNE_POLYPHONIC_RECALL = "1";
+  if (c.wmMaxItems != null) env.MNEMOSYNE_WM_MAX_ITEMS = String(c.wmMaxItems);
+  if (c.wmTtlHours != null) env.MNEMOSYNE_WM_TTL_HOURS = String(c.wmTtlHours);
+  return env;
+}
 
 /** Run one `mnemosyne` subcommand and resolve with trimmed stdout. */
 export function runMnemosyne(cli, command, args, timeoutMs, env) {
@@ -37,7 +90,7 @@ export function runMnemosyne(cli, command, args, timeoutMs, env) {
           if (error.code === "ENOENT") {
             reject(
               new Error(
-                ` Mnemosyne CLI "${cli}" not found on PATH. Install it first: pip install mnemosyne-memory`
+                `Mnemosyne CLI "${cli}" not found on PATH. Install it via the Mnemosyne panel (Setup) or run: uv tool install mnemosyne-memory`
               )
             );
             return;
@@ -68,13 +121,20 @@ export function recallArgs({ query, topK }, defaultTopK) {
 }
 
 /** Resolve a CLI name to an absolute path on PATH (with ~/.local/bin appended),
- *  or null if not found. Lets integration tests detect the real mnemosyne binary. */
+ *  or null if not found. */
 export function resolveCli(cli = "mnemosyne") {
-  if (cli.includes("/") || cli.includes("\\")) return cli;
+  if (cli.includes("/") || cli.includes("\\")) {
+    try {
+      accessSync(cli, constants.X_OK);
+      return cli;
+    } catch {
+      return null;
+    }
+  }
   const pathSep = process.platform === "win32" ? ";" : ":";
   const dirs = [
     ...String(process.env.PATH ?? "").split(pathSep),
-    `${process.env.HOME ?? ""}/.local/bin`,
+    join(homedir(), ".local", "bin"),
   ];
   const exts = process.platform === "win32" ? [".exe", ""] : [""];
   for (const dir of dirs) {
@@ -92,12 +152,57 @@ export function resolveCli(cli = "mnemosyne") {
 /** Build an env that points mnemosyne at an isolated data dir (no embeddings),
  *  so integration tests never touch the user's real memory database. */
 export function isolatedEnv(dataDir, base = process.env) {
-  return {
-    ...base,
-    MNEMOSYNE_DATA_DIR: dataDir,
-    MNEMOSYNE_NO_EMBEDDINGS: "1",
-    HOME: dataDir,
-  };
+  return { ...base, MNEMOSYNE_DATA_DIR: dataDir, MNEMOSYNE_NO_EMBEDDINGS: "1", HOME: dataDir };
+}
+
+/** Resolve uv binary path (with ~/.local/bin appended), or null. */
+function resolveUv() {
+  return resolveCli("uv");
+}
+
+/** Install the mnemosyne CLI via `uv tool install`. Returns a status object. */
+export async function setupMnemosyne() {
+  const existing = resolveCli("mnemosyne");
+  if (existing) return { ok: true, alreadyInstalled: true, path: existing };
+  const uv = resolveUv();
+  if (!uv) {
+    return {
+      ok: false,
+      error: "uv not found on PATH. Install uv first: https://docs.astral.sh/uv/getting-started/installation/",
+    };
+  }
+  try {
+    const stdout = await runExec(uv, ["tool", "install", "mnemosyne-memory"], 180_000);
+    const path = resolveCli("mnemosyne");
+    return { ok: true, alreadyInstalled: false, path, output: stdout };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+function runExec(file, args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: timeoutMs, windowsHide: true }, (error, stdout, stderr) => {
+      if (error) reject(new Error(stderr.trim() || error.message));
+      else resolve(String(stdout).trim());
+    });
+  });
+}
+
+/** Diagnose: detect CLI, ensure data dir, run stats. Returns a structured report. */
+export async function diagnoseMnemosyne(config) {
+  const c = config ?? {};
+  const cli = resolveCli(c.cli ?? "mnemosyne");
+  const dataDir = c.dataDir ?? DEFAULT_DATA_DIR;
+  if (!cli) return { ok: false, cliReady: false, error: "mnemosyne CLI not on PATH" };
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    const env = buildEnv(c);
+    const stats = await runMnemosyne(cli, "stats", [], c.timeoutMs ?? 20_000, env);
+    return { ok: true, cliReady: true, path: cli, dataDir, stats };
+  } catch (e) {
+    return { ok: false, cliReady: true, path: cli, dataDir, error: String(e?.message ?? e) };
+  }
 }
 
 const TEXT_OUTPUT = {
@@ -107,8 +212,38 @@ const TEXT_OUTPUT = {
 
 export function apply(ctx, config) {
   const cfg = () => config ?? {};
+  const env = () => buildEnv(cfg());
   const run = (command, args) =>
-    runMnemosyne(cfg().cli ?? "mnemosyne", command, args, cfg().timeoutMs ?? 20_000);
+    runMnemosyne(cfg().cli ?? "mnemosyne", command, args, cfg().timeoutMs ?? 20_000, env());
+
+  // Persist config into the DSH settings namespace when the settings service is
+  // available (web profile). Headless/minimal hosts keep using entry config.
+  const settings = ctx.get("settings");
+  if (settings) {
+    ctx.effect(() => settings.register("mnemosyne", Config, { base: cfg() }), "mnemosyne: settings namespace");
+  }
+
+  // Host RPC handlers used by the client panel (Client→Host JSON RPC).
+  const harness = ctx.get("harness");
+  if (harness && typeof harness.handle === "function") {
+    ctx.effect(() => harness.handle("mnemosyne.setup", () => setupMnemosyne()), "mnemosyne: setup rpc");
+    ctx.effect(() => harness.handle("mnemosyne.diagnose", () => diagnoseMnemosyne(cfg())), "mnemosyne: diagnose rpc");
+    ctx.effect(
+      () =>
+        harness.handle("mnemosyne.testConnection", async () => {
+          try {
+            const marker = `dsh-conn-test-${Date.now()}`;
+            const stored = await run("store", storeArgs({ content: marker, source: "dsh-panel" }));
+            const id = stored.split("Stored:")[1]?.trim();
+            if (id) await run("delete", [id]);
+            return { ok: true, message: "store + delete succeeded", probeId: id ?? null };
+          } catch (e) {
+            return { ok: false, error: String(e?.message ?? e) };
+          }
+        }),
+      "mnemosyne: testConnection rpc"
+    );
+  }
 
   ctx.inject(["tools"], (sctx) => {
     sctx.effect(
@@ -121,10 +256,7 @@ export function apply(ctx, config) {
             parameters: {
               content: { type: "string", required: true, description: "The memory content to store." },
               source: { type: "string", description: "Source tag for the memory (default: dsh)." },
-              importance: {
-                type: "number",
-                description: "Importance score 0.0-1.0; higher ranks higher in recall.",
-              },
+              importance: { type: "number", description: "Importance score 0.0-1.0; higher ranks higher in recall." },
             },
             output: TEXT_OUTPUT,
             async execute(args) {
@@ -143,15 +275,8 @@ export function apply(ctx, config) {
             description:
               "Search Mnemosyne memory by semantic similarity. Use before starting work on a task to retrieve relevant prior context.",
             parameters: {
-              query: {
-                type: "string",
-                required: true,
-                description: "Natural-language query describing what you need.",
-              },
-              top_k: {
-                type: "number",
-                description: `Maximum results to return (default: ${cfg().defaultTopK ?? 5}).`,
-              },
+              query: { type: "string", required: true, description: "Natural-language query describing what you need." },
+              top_k: { type: "number", description: `Maximum results to return (default: ${cfg().defaultTopK ?? 5}).` },
             },
             output: TEXT_OUTPUT,
             async execute(args) {
@@ -169,13 +294,7 @@ export function apply(ctx, config) {
             name: "mnemosyne_forget",
             description:
               "Delete a memory from Mnemosyne by its ID. Use when the user asks to remove outdated or incorrect information.",
-            parameters: {
-              id: {
-                type: "string",
-                required: true,
-                description: "The memory ID returned by mnemosyne_remember.",
-              },
-            },
+            parameters: { id: { type: "string", required: true, description: "The memory ID returned by mnemosyne_remember." } },
             output: TEXT_OUTPUT,
             async execute(args) {
               return run("delete", [args.id]);
@@ -190,8 +309,7 @@ export function apply(ctx, config) {
         sctx.tools.register(
           defineTool({
             name: "mnemosyne_stats",
-            description:
-              "Show Mnemosyne database statistics: memory counts, bank sizes, and model status.",
+            description: "Show Mnemosyne database statistics: memory counts, bank sizes, and model status.",
             parameters: {},
             output: TEXT_OUTPUT,
             async execute() {
@@ -220,8 +338,6 @@ export function apply(ctx, config) {
     );
   });
 
-  // ponytail: skill 以 runtime 形式内嵌注册（rank 250，可被项目/用户级同名 skill 覆盖）；
-  // 若日后需要随包分发更多资源文件，再改为文件系统 provider。
   const skills = ctx.get("skills");
   if (skills) {
     ctx.effect(() => skills.register(SKILL), "mnemosyne: skill");
@@ -238,7 +354,7 @@ export const SKILL = {
 
 [Mnemosyne](https://github.com/mnemosyne-oss/mnemosyne) is a local-first AI memory layer. It stores facts, preferences, and observations in a SQLite database on your machine and surfaces them with semantic search. No cloud. No API keys.
 
-This skill ships inside the \`dsh-mnemosyne\` plugin.
+This skill ships inside the \`dsh-mnemosyne\` plugin. Data lives under \`~/.dsh/mnemosyne\`.
 
 ## When to use Mnemosyne
 
@@ -256,36 +372,6 @@ This skill ships inside the \`dsh-mnemosyne\` plugin.
 - \`mnemosyne_stats\` — Show memory statistics.
 - \`mnemosyne_sleep\` — Consolidate old memories into summaries.
 
-## Usage examples
-
-Remember a preference:
-
-\`\`\`
-Tool: mnemosyne_remember
-content: "User prefers pytest with fixtures over unittest"
-importance: 0.9
-\`\`\`
-
-Recall relevant context before a task:
-
-\`\`\`
-Tool: mnemosyne_recall
-query: "testing preferences"
-\`\`\`
-
-Remove outdated info:
-
-\`\`\`
-Tool: mnemosyne_forget
-id: "<memory-id-from-recall>"
-\`\`\`
-
-Consolidate at the end of a big session:
-
-\`\`\`
-Tool: mnemosyne_sleep
-\`\`\`
-
 ## Best practices
 
 - Store concise, factual memories. Avoid dumping entire conversations.
@@ -297,8 +383,9 @@ Tool: mnemosyne_sleep
 ## Installation
 
 \`\`\`bash
-pip install mnemosyne-memory
 dsh plugin --profile web add dsh-mnemosyne
+# Then open the Mnemosyne panel in Settings and click Setup to install the CLI,
+# or run: uv tool install mnemosyne-memory
 \`\`\`
 `,
 };

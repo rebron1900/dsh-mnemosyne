@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   apply,
+  buildEnv,
+  DEFAULT_DATA_DIR,
   recallArgs,
   runMnemosyne,
   SKILL,
@@ -90,7 +92,7 @@ describe("runMnemosyne", () => {
   it("explains the install step when the CLI is missing", async () => {
     await assert.rejects(
       runMnemosyne("definitely-not-on-path-xyz", "stats", [], 1000),
-      /pip install mnemosyne-memory/
+      /Mnemosyne CLI .* not found.*uv tool install mnemosyne-memory/
     );
   });
 
@@ -119,5 +121,35 @@ describe("bundle manifest", () => {
     assert.match(patch, /^- insert:/m);
     assert.match(patch, /- id: mnemosyne/);
     assert.match(patch, /name: dsh-mnemosyne/);
+    assert.match(patch, /dataDir: ~/);
+  });
+});
+
+describe("buildEnv", () => {
+  it("always pins MNEMOSYNE_DATA_DIR to the plugin default when unset", () => {
+    const env = buildEnv({}, {});
+    assert.equal(env.MNEMOSYNE_DATA_DIR, DEFAULT_DATA_DIR);
+    assert.equal(env.MNEMOSYNE_NO_EMBEDDINGS, undefined);
+    assert.equal(env.MNEMOSYNE_LLM_ENABLED, undefined);
+  });
+
+  it("injects only explicitly-set fields and leaves user env untouched otherwise", () => {
+    const base = { MNEMOSYNE_EMBEDDING_MODEL: "user-kept-model", PATH: "/usr/bin" };
+    const env = buildEnv(
+      { dataDir: "/tmp/d", embeddingModel: "BAAI/bge-small-zh-v1.5", embeddingDim: 512, llmEnabled: false, polyphonicRecall: true },
+      base
+    );
+    assert.equal(env.MNEMOSYNE_DATA_DIR, "/tmp/d");
+    assert.equal(env.MNEMOSYNE_EMBEDDING_MODEL, "BAAI/bge-small-zh-v1.5");
+    assert.equal(env.MNEMOSYNE_EMBEDDING_DIM, "512");
+    assert.equal(env.MNEMOSYNE_LLM_ENABLED, "false");
+    assert.equal(env.MNEMOSYNE_POLYPHONIC_RECALL, "1");
+    assert.equal(env.MNEMOSYNE_NO_EMBEDDINGS, undefined);
+    assert.equal(env.PATH, "/usr/bin");
+  });
+
+  it("sets NO_EMBEDDINGS only when explicitly true", () => {
+    assert.equal(buildEnv({ noEmbeddings: true }, {}).MNEMOSYNE_NO_EMBEDDINGS, "1");
+    assert.equal(buildEnv({ noEmbeddings: false }, {}).MNEMOSYNE_NO_EMBEDDINGS, undefined);
   });
 });

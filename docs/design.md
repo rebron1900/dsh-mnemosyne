@@ -144,13 +144,16 @@ dsh-mnemosyne/
 ## 7. 安装与验证
 
 ```bash
-pip install mnemosyne-memory                      # 前置：mnemosyne CLI
 dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <本地路径>
 # 重启 web profile 后：
-# 1) 工具列表出现 mnemosyne_remember / recall / forget / stats / sleep
-# 2) 技能目录出现 mnemosyne
-# 3) 冒烟：mnemosyne_remember 存一条 → mnemosyne_recall 检回 → mnemosyne_forget 删除
+# 1) 打开 Settings > Mnemosyne，点 Setup 自动安装 CLI（uv tool install mnemosyne-memory）
+#    或手动：uv tool install mnemosyne-memory
+# 2) 点 Test connection 验证 store+delete 闭环
+# 3) 工具列表出现 mnemosyne_remember / recall / forget / stats / sleep
+# 4) 技能目录出现 mnemosyne
 ```
+
+数据与配置落点：`~/.dsh/mnemosyne/`（`MNEMOSYNE_DATA_DIR` 透传），SQLite 库 `mnemosyne.db` 与 `config.yaml` 均在此目录。
 
 ## 8. 测试策略
 
@@ -203,9 +206,62 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 版本号 bump → tag `vX.Y.Z` → `npm publish`（public）。关键词沿用 `deepseek-harness` / `dsh-plugin` 便于被检索。
 
-## 10. 后续可选增强（v0.1 明确不做）
+## 10. 面板、自动安装与 .dsh 数据落盘（v0.2）
 
-- Web 设置页（`settingsNamespace` + client 桥）— 当前仅 3 个配置项，patch/config 足够；
-- 自定义工具卡片（`tool.call.toolview` slot）— 文本输出无需卡片；
-- 会话收尾自动 `mnemosyne_sleep`（agent loop 事件钩子）— 待确认事件面后再做；
+### 10.1 数据落盘
+
+`MNEMOSYNE_DATA_DIR` 决定 mnemosyne 的 SQLite 库与 `config.yaml` 位置。插件 `Config.dataDir` 默认 `~/.dsh/mnemosyne`，`buildEnv()` 总是注入 `MNEMOSYNE_DATA_DIR`，因此数据与配置全部落在 `.dsh` 下，不再依赖 `~/.hermes`。
+
+### 10.2 自动安装 CLI
+
+`setupMnemosyne()` 先 `resolveCli("mnemosyne")`；已就绪则返回。否则 `resolveCli("uv")`，用 `uv tool install mnemosyne-memory` 安装（超时 180s），再探测 CLI 路径。面板 Setup 按钮通过 `harness.handle("mnemosyne.setup")` RPC 触发。uv 缺失时返回友好错误（含安装链接）。
+
+### 10.3 配置透传
+
+`buildEnv(config)` 把 `Config` 字段映射到 mnemosyne 环境变量，**仅注入显式设非默认的字段**，用户全局 env 里已设的 `MNEMOSYNE_*` 不被覆盖（`dataDir` 除外，它是插件核心契约）：
+
+| Config 字段 | 环境变量 |
+|---|---|
+| `dataDir` | `MNEMOSYNE_DATA_DIR` |
+| `noEmbeddings` | `MNEMOSYNE_NO_EMBEDDINGS` |
+| `embeddingModel`/`embeddingDim`/`embeddingApiUrl`/`embeddingApiKey` | `MNEMOSYNE_EMBEDDING_*` |
+| `llmEnabled`/`llmBaseUrl`/`llmApiKey`/`llmModel`/`llmTimeout` | `MNEMOSYNE_LLM_*` |
+| `polyphonicRecall` | `MNEMOSYNE_POLYPHONIC_RECALL` |
+| `wmMaxItems`/`wmTtlHours` | `MNEMOSYNE_WM_*` |
+
+`autoSleep`/`sleepThreshold`/`ignorePatterns` 是 `config.yaml` 键（非 env），由 mnemosyne 在 `dataDir/config.yaml` 自行读取；`Config` 声明它们供 settings 表单编辑，未来可扩展 `harness.handle` 写入 config.yaml。
+
+### 10.4 设置面板（client 端）
+
+`src/client.js` 以 `window.__ModuleLoader__.load` 格式注册一个 cordis 客户端插件，`apply` 里：
+
+1. `ctx.locale.register("dsh-mnemosyne", {zh, en})` 注册双语字典；
+2. `ctx.slots.inject("settings.section", () => ctx.slots.register({name:"settings.section", id:"mnemosyne", order:50, label, locale}, render))` 在 Settings 左侧注册独立入口（仿 dsh-market）。
+
+`MnemosynePanel` 组件（`React.createElement`，无 JSX）：
+- **状态卡**：CLI 就绪/路径、数据目录、记忆计数（解析 `mnemosyne stats` 的 `Total memories:`）；
+- **Setup 按钮**：`host.call("mnemosyne.setup")` 自动安装 CLI；
+- **Test 按钮**：`host.call("mnemosyne.testConnection")` 跑 store+delete 探针；
+- **Refresh 按钮**：`host.call("mnemosyne.diagnose")` 刷新状态。
+
+配置编辑由 DSH 的 settings 表单承担（host 端 `ctx.settings.register("mnemosyne", Config)` 自动在 Settings 生成表单），面板提供配置提示文案。
+
+`package.json` 声明 `dsh.client: { inject: [...client-ui 包], platform: "web" }` 与 `"./client"` 导出。
+
+### 10.5 Host RPC
+
+`apply` 软依赖 `ctx.get("harness")`，注册三个 `harness.handle` 处理器供面板 `host.call`：
+
+| method | 行为 |
+|---|---|
+| `mnemosyne.setup` | 检测/安装 CLI（uv tool install） |
+| `mnemosyne.diagnose` | 探测 CLI + 确保 dataDir + 跑 stats，返回结构化报告 |
+| `mnemosyne.testConnection` | store 探针记忆 → delete，验证闭环 |
+
+## 11. 后续可选增强
+
+- 面板内嵌完整配置表单（当前依赖 DSH settings 自动表单）；
+- `autoSleep`/`sleepThreshold`/`ignorePatterns` 写入 `config.yaml` 的 host RPC；
+- 自定义工具卡片（`tool.call.toolview` slot）— 文本输出暂无需；
+- 会话收尾自动 `mnemosyne_sleep`（agent loop 事件钩子）；
 - 去 CLI 化直连 SQLite — 与上游架构冲突，除非上游 API 变动否则不考虑。
