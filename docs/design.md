@@ -157,9 +157,9 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ## 8. 测试策略
 
-测试分两层，均用 `node:test`（stdlib，零额外依赖），`pnpm test` 一并执行。
+测试分三层，均用 `node:test`（stdlib，零额外依赖），`pnpm test` 一并执行，共 24 例。
 
-### 8.1 单元测试 `test/index.test.js`（9 例，无需 mnemosyne CLI）
+### 8.1 单元测试 `test/index.test.js`（12 例，无需 mnemosyne CLI）
 
 1. `storeArgs` / `recallArgs` 位置参数组装（含可选参数缺省）；
 2. mock ctx 上 `apply()` 恰好注册 5 个预期工具，且每个都有 execute / output.schema / render；
@@ -190,7 +190,11 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 集成验证（需真实宿主）按 §7 手工执行一次。
 
-### 8.3 真实 CLI 行为契约（实测得出）
+### 8.3 客户端测试 `test/client.test.js`（3 例）
+
+使用 `window.__ModuleLoader__` 与 React mock 验证客户端模块导出、locale 注册、独立 `settings.section` slot、卡片渲染结构和客户端插件契约。
+
+### 8.4 真实 CLI 行为契约（实测得出）
 
 | 命令 | stdout | 退出码 |
 |---|---|---|
@@ -214,13 +218,13 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ### 10.2 自动安装 CLI
 
-`setupMnemosyne()` 先 `resolveCli("mnemosyne")`；已就绪则返回。否则 `resolveCli("uv")`，用 `uv tool install mnemosyne-memory` 安装（超时 180s），再探测 CLI 路径。面板 Setup 按钮通过 `harness.handle("mnemosyne.setup")` RPC 触发。uv 缺失时返回友好错误（含安装链接）。
+`setupMnemosyne()` 先 `resolveCli("mnemosyne")`；已就绪则确保 `config.yaml` 的面板配置项有默认值后返回。否则 `resolveCli("uv")`，用 `uv tool install mnemosyne-memory` 安装（超时 180s），再探测 CLI 路径并补齐默认配置。面板 Setup 按钮通过 `POST /mnemosyne/setup` 触发。uv 缺失时返回友好错误。
 
 ### 10.3 配置透传
 
-`buildEnv(config)` 把 `Config` 字段映射到 mnemosyne 环境变量，**仅注入显式设非默认的字段**，用户全局 env 里已设的 `MNEMOSYNE_*` 不被覆盖（`dataDir` 除外，它是插件核心契约）：
+`buildEnv(config)` 负责插件调用 CLI 时的运行时环境，**仅注入显式设非默认的字段**，用户全局 env 里已设的 `MNEMOSYNE_*` 不被覆盖（`dataDir` 除外，它是插件核心契约）。mnemosyne 自身的完整配置由 `dataDir/config.yaml` 管理，文件优先级为 config.yaml > env vars > hardcoded defaults；面板直接读写 config.yaml 中的面板字段：
 
-| Config 字段 | 环境变量 |
+| Config 字段 | CLI 运行时环境 / config.yaml 键 |
 |---|---|
 | `dataDir` | `MNEMOSYNE_DATA_DIR` |
 | `noEmbeddings` | `MNEMOSYNE_NO_EMBEDDINGS` |
@@ -229,7 +233,9 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 | `polyphonicRecall` | `MNEMOSYNE_POLYPHONIC_RECALL` |
 | `wmMaxItems`/`wmTtlHours` | `MNEMOSYNE_WM_*` |
 
-`autoSleep`/`sleepThreshold`/`ignorePatterns` 是 `config.yaml` 键（非 env），由 mnemosyne 在 `dataDir/config.yaml` 自行读取；`Config` 声明它们供 settings 表单编辑，未来可扩展 `harness.handle` 写入 config.yaml。
+面板字段对应 config.yaml 的扁平顶层键：`dataDir`→`data_dir`、`noEmbeddings`→`no_embeddings`、`embeddingModel`→`embedding_model`、`embeddingDim`→`embedding_dim`、`embeddingApiUrl`→`embedding_api_url`、`embeddingApiKey`→`embedding_api_key`、`llmEnabled`→`llm_enabled`、`llmBaseUrl`→`llm_base_url`、`llmApiKey`→`llm_api_key`、`llmModel`→`llm_model`、`llmTimeout`→`llm_timeout`、`polyphonicRecall`→`polyphonic_recall`、`wmMaxItems`→`wm_max_items`、`wmTtlHours`→`wm_ttl_hours`、`autoSleep`→`auto_sleep_enabled`、`sleepThreshold`→`sleep_threshold`、`ignorePatterns`→`ignore_patterns`。`cli`、`defaultTopK`、`timeoutMs` 是 DSH 专用设置。
+
+`readMnemosyneConfigYaml()` 解析扁平 YAML 标量并恢复字符串、数字、布尔值和 null 类型；`ensureConfigDefaults()` 在 setup/diagnose 时只为缺失或空值补写 mnemosyne 默认值，不覆盖用户已有值。
 
 ### 10.4 设置面板（client 端）
 
@@ -240,11 +246,14 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 `MnemosynePanel` 组件（`React.createElement`，无 JSX）：
 - **状态卡**：CLI 就绪/路径、数据目录、记忆计数（解析 `mnemosyne stats` 的 `Total memories:`）；
-- **Setup 按钮**：`host.call("mnemosyne.setup")` 自动安装 CLI；
-- **Test 按钮**：`host.call("mnemosyne.testConnection")` 跑 store+delete 探针；
-- **Refresh 按钮**：`host.call("mnemosyne.diagnose")` 刷新状态。
+- **Setup 按钮**：`POST /mnemosyne/setup` 自动安装 CLI，并补齐 config.yaml 默认值；
+- **Test 按钮**：`POST /mnemosyne/test` 跑 store+delete 探针，成功后立即调用 diagnose 刷新 stats；
+- **Refresh 按钮**：`GET /mnemosyne/diagnose` 刷新状态；
+- **配置卡片**：状态卡和插件卡默认展开，其余配置卡默认折叠；每个字段采用左侧名称/问号 tooltip、右侧输入控件的单行布局；空值字段用默认值 placeholder；
+- **恢复默认配置**：`DELETE /mnemosyne/config` 将面板管理的配置写回 mnemosyne 默认值并执行 config reload；
+- **底部提醒**：提示用户可直接编辑 `~/.dsh/mnemosyne/config.yaml` 修改更多参数。
 
-配置编辑由 DSH 的 settings 表单承担（host 端 `ctx.settings.register("mnemosyne", Config)` 自动在 Settings 生成表单），面板提供配置提示文案。
+配置编辑由 DSH settings 与扁平 config.yaml 共同承担。config.yaml 字段通过 HTTP 路由读写，保存后自动执行 `mnemosyne config reload`；大部分配置无需重启，`vec_type` 等启动时确定的配置例外。
 
 `package.json` 声明 `dsh.client: { inject: [...client-ui 包], platform: "web" }` 与 `"./client"` 导出。
 
@@ -257,12 +266,13 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 | `/mnemosyne/diagnose` | GET | 探测 CLI + 确保 dataDir + 跑 stats，返回结构化报告 |
 | `/mnemosyne/setup` | POST | 检测/安装 CLI（uv tool install） |
 | `/mnemosyne/test` | POST | store 探针记忆 → delete，验证闭环 |
-| `/mnemosyne/config` | GET | 读取 dataDir/config.yaml 的 memory.mnemosyne 段 |
-| `/mnemosyne/config` | POST | 写入 dataDir/config.yaml 的 memory.mnemosyne 段（auto_sleep / sleep_threshold / ignore_patterns） |
+| `/mnemosyne/config` | GET | 读取扁平 dataDir/config.yaml，合并面板管理字段的 mnemosyne 默认值 |
+| `/mnemosyne/config` | POST | 写入面板管理的顶层 config.yaml 键，并执行 `mnemosyne config reload` |
+| `/mnemosyne/config` | DELETE | 将面板管理的顶层键恢复为 mnemosyne 默认值，并执行 config reload |
 
 ### 10.6 会话收尾自动 sleep
 
-`apply` 通过 `ctx.on("session/event", ...)` 监听 `turn/end` 事件。当 `config.yaml` 的 `auto_sleep` 为 true 且工作记忆条目数 ≥ `sleep_threshold` 时，自动调用 `mnemosyne sleep` 整合记忆。读取 `config.yaml`（而非 DSH settings）作为事实源，使面板编辑即时生效无需重启。失败静默跳过，不干扰会话。
+`apply` 通过 `ctx.on("session/event", ...)` 监听 `turn/end` 事件。当 `config.yaml` 的 `auto_sleep_enabled` 为 true 且工作记忆条目数 ≥ `sleep_threshold` 时，自动调用 `mnemosyne sleep` 整合记忆。读取 config.yaml（而非 DSH settings）作为事实源，使面板编辑即时生效无需重启。失败静默跳过，不干扰会话。
 
 ## 11. 后续可选增强
 
