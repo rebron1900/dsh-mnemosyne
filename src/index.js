@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { accessSync, constants } from "node:fs";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import z from "@deepseek-ai/schemastery";
 
@@ -25,12 +26,12 @@ export const Config = z.object({
 });
 
 /** Run one `mnemosyne` subcommand and resolve with trimmed stdout. */
-export function runMnemosyne(cli, command, args, timeoutMs) {
+export function runMnemosyne(cli, command, args, timeoutMs, env) {
   return new Promise((resolve, reject) => {
     execFile(
       cli,
       [command, ...args],
-      { timeout: timeoutMs, windowsHide: true },
+      { timeout: timeoutMs, windowsHide: true, env: env ?? process.env },
       (error, stdout, stderr) => {
         if (error) {
           if (error.code === "ENOENT") {
@@ -64,6 +65,39 @@ export function storeArgs({ content, source, importance }) {
 
 export function recallArgs({ query, topK }, defaultTopK) {
   return [query, String(topK ?? defaultTopK)];
+}
+
+/** Resolve a CLI name to an absolute path on PATH (with ~/.local/bin appended),
+ *  or null if not found. Lets integration tests detect the real mnemosyne binary. */
+export function resolveCli(cli = "mnemosyne") {
+  if (cli.includes("/") || cli.includes("\\")) return cli;
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const dirs = [
+    ...String(process.env.PATH ?? "").split(pathSep),
+    `${process.env.HOME ?? ""}/.local/bin`,
+  ];
+  const exts = process.platform === "win32" ? [".exe", ""] : [""];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const p = `${dir}/${cli}${ext}`;
+      try {
+        accessSync(p, constants.X_OK);
+        return p;
+      } catch {}
+    }
+  }
+  return null;
+}
+
+/** Build an env that points mnemosyne at an isolated data dir (no embeddings),
+ *  so integration tests never touch the user's real memory database. */
+export function isolatedEnv(dataDir, base = process.env) {
+  return {
+    ...base,
+    MNEMOSYNE_DATA_DIR: dataDir,
+    MNEMOSYNE_NO_EMBEDDINGS: "1",
+    HOME: dataDir,
+  };
 }
 
 const TEXT_OUTPUT = {

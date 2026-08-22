@@ -12,9 +12,9 @@
 ```text
 dsh-mnemosyne/
 ├── cordis.patch.yml   # bundle patch 层：把 mnemosyne 插件行插入 profile 组合树
-├── src/index.js       # cordis 插件：Config / apply → 注册 5 工具 + runtime skill
-├── test/              # node:test 单元测试（mock ctx 验证注册与参数组装）
-├── docs/design.md     # 实现方案（Pi-mnemosyne 分析、DSH 扩展体系、概念映射）
+├── src/index.js       # cordis 插件：Config / apply → 注册 5 工具 + runtime skill；runMnemosyne/resolveCli/isolatedEnv
+├── test/              # node:test：index.test.js（单元）+ integration.test.js（对真实 CLI 的集成）
+├── docs/design.md     # 实现方案（Pi-mnemosyne 分析、DSH 扩展体系、概念映射、CLI 契约）
 └── package.json       # dsh.bundle 声明是 bundle 身份的关键
 ```
 
@@ -45,7 +45,9 @@ dsh-mnemosyne/
 
 - 测试框架：node:test（stdlib，零额外依赖）
 - 执行命令：`pnpm test`
-- 覆盖范围：参数组装、5 个工具注册契约、skill 注册、manifest（package.json 的 dsh.bundle 与 patch 行）、CLI 缺失/非零退出路径
+- 单元层 `test/index.test.js`（9 例，无需 CLI）：参数组装、5 个工具注册契约、skill 注册、render 输出、manifest（dsh.bundle 与 patch 行）、CLI 缺失/非零退出路径
+- 集成层 `test/integration.test.js`（9 例，需真实 `mnemosyne` CLI，否则自动 skip）：对照主仓库 `tests/test_cli_*.py` 契约，用 `MNEMOSYNE_DATA_DIR`+`MNEMOSYNE_NO_EMBEDDINGS=1` 隔离临时库，跑 remember/recall/forget/stats/sleep 全链路 + 端到端闭环 + apply() 的 execute() 闭包直驱真实 CLI
+- CLI 契约实测：`store`→`Stored: <16hex>`；`recall` 命中含 `ID:/Content:/Score:`、未命中仅 `Results for:`；`delete` 有效→`Deleted:`、缺失→reject `Memory not found`；`stats`→计数行；`sleep`→`Consolidation complete`
 
 ## CodeGraph
 

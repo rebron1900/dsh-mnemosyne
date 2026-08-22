@@ -154,16 +154,50 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ## 8. 测试策略
 
-`pnpm test`（node --test）覆盖：
+测试分两层，均用 `node:test`（stdlib，零额外依赖），`pnpm test` 一并执行。
+
+### 8.1 单元测试 `test/index.test.js`（9 例，无需 mnemosyne CLI）
 
 1. `storeArgs` / `recallArgs` 位置参数组装（含可选参数缺省）；
 2. mock ctx 上 `apply()` 恰好注册 5 个预期工具，且每个都有 execute / output.schema / render；
 3. skill 注册且名字合法 kebab-case、正文含工具引用；
-4. render 输出为合法 text block 数组;
-5. CLI 缺失 → 提示 `pip install mnemosyne-memory`；非零退出 → reject stderr；
+4. render 输出为合法 text block 数组；
+5. CLI 缺失 → 提示 `pip install mnemosyne-memory`；非零退出 → reject；
 6. manifest 契约：`dsh.bundle.patch` 指向存在的 patch 文件，patch 含 insert 行。
 
+### 8.2 集成测试 `test/integration.test.js`（9 例，需真实 `mnemosyne` CLI）
+
+对照 mnemosyne 主仓库 `tests/test_cli_*.py` 的行为契约，对着真实 CLI 跑插件自己的代码路径（`runMnemosyne` + `storeArgs`/`recallArgs` + `apply()` 注册的 `execute()` 闭包）。`resolveCli()` 找不到 `mnemosyne` 时整组自动 skip。
+
+隔离：`before` 钩子把 `process.env.MNEMOSYNE_DATA_DIR` 指向独立 tmpdir、`MNEMOSYNE_NO_EMBEDDINGS=1` 跳过嵌入模型，**绝不触碰用户真实记忆库**；`after` 还原 env 并清理 tmpdir。各用例用唯一 marker 避免相互命中。
+
+覆盖：
+
+| 用例 | 验证契约 |
+|---|---|
+| stats 空库 | `Mnemosyne Stats` + `Total memories: 0` |
+| remember | `Stored: <16-hex-id>` |
+| recall 未命中 | `Results for: <q>` 且无 `ID:` |
+| recall 命中 | 含 `ID: <id>` / `Content:` / `Score:` |
+| forget 有效 id | `Deleted: <id>` |
+| forget 缺失 id | reject 含 `Memory not found: <id>`（exit 1 契约） |
+| sleep | `Consolidation complete` |
+| 端到端闭环 | remember→recall 命中→forget→recall 确认空 |
+| execute 闭包 | `apply()` 注册的工具直接驱动真实 CLI（config 钉死绝对路径） |
+
 集成验证（需真实宿主）按 §7 手工执行一次。
+
+### 8.3 真实 CLI 行为契约（实测得出）
+
+| 命令 | stdout | 退出码 |
+|---|---|---|
+| `stats` | `Mnemosyne Stats` + `Total/Working/Episodic/Knowledge triples` 计数行 | 0 |
+| `store <c> [s] [imp]` | `Stored: <16-hex-id>` | 0 |
+| `recall <q> [k]` 空 | `Results for: <q>` 无条目 | 0 |
+| `recall <q> [k]` 命中 | `ID:` / `Content:` / `Score:` 行 | 0 |
+| `sleep` | `Consolidation complete: {...}` | 0 |
+| `delete <缺失id>` | stderr `Error: Memory not found: <id>` | 1 |
+| `delete <有效id>` | `Deleted: <id>` | 0 |
 
 ## 9. 发布
 
