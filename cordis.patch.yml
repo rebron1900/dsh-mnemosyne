@@ -1,0 +1,10 @@
+# dsh-mnemosyne — Mnemosyne memory tools for DeepSeek Harness.
+# Proxies every operation to the local `mnemosyne` CLI (pip install mnemosyne-memory).
+# Config keys mirror the Config schema exported by src/index.js.
+- insert:
+    - id: mnemosyne
+      name: dsh-mnemosyne
+      config:
+        cli: mnemosyne        # CLI executable on PATH
+        defaultTopK: 5        # recall result cap when the model omits top_k
+        timeoutMs: 20000      # per-call CLI timeout
