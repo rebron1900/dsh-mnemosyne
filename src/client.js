@@ -39,6 +39,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       discard: "放弃",
       pending: "有未保存的修改",
       saveFailed: "保存失败",
+      footerHint: "面板仅列出常用配置。如需修改更多参数，请直接编辑 ~/.dsh/mnemosyne/config.yaml，保存后大部分配置自动热加载（向量类型 vec_type 改动需重启 dsh）。",
       groupPlugin: "插件",
       groupPlugin_hint: "dsh-mnemosyne 插件自身行为。这些参数控制 CLI 调用方式与数据存放位置，仅作用于 dsh-mnemosyne，不影响 mnemosyne CLI 本体。",
       groupEmbedding: "Embedding",
@@ -115,6 +116,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       discard: "Discard",
       pending: "Unsaved changes",
       saveFailed: "Save failed",
+      footerHint: "This panel covers common settings only. To change more parameters, edit ~/.dsh/mnemosyne/config.yaml directly — most changes hot-reload automatically (only vec_type requires a dsh restart).",
       groupPlugin: "Plugin",
       groupPlugin_hint: "dsh-mnemosyne plugin behavior. These control CLI invocation and data location; they only affect the dsh plugin, not the mnemosyne CLI itself.",
       groupEmbedding: "Embedding",
@@ -249,6 +251,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-status-error{color:var(--dsw-alias-label-error);font-size:12px;line-height:1.5}' +
     '.mn-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0 4px}' +
     '.mn-msg{font-size:12px;color:var(--dsw-alias-label-secondary);padding:4px 0}' +
+    '.mn-footer{list-style:none;text-align:center;font-size:12px;color:var(--dsw-alias-label-tertiary);line-height:1.6;padding:12px 16px 4px}' +
     '@media(max-width:640px){.mn-field{flex-direction:column;gap:6px}.mn-field-left{flex:none;padding-top:0}}';
 
   let stylesInstalled = false;
@@ -504,6 +507,8 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           t(g + "_hint"),
         ) : null,
       ),
+      // Footer hint
+      h("li", { className: "mn-footer" }, t("footerHint")),
     );
   }
 

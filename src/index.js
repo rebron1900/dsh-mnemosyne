@@ -320,6 +320,12 @@ export function writeMnemosyneConfigYaml(dataDir, values) {
   return { ok: true, path: p };
 }
 
+/** Run `mnemosyne config reload` to hot-reload the config file. */
+export async function reloadMnemosyneConfig(cliPath, dataDir, timeoutMs = 10_000) {
+  const env = { ...process.env, MNEMOSYNE_DATA_DIR: dataDir };
+  return runMnemosyne(cliPath, "config", ["reload"], timeoutMs, env);
+}
+
 export function apply(ctx, config) {
   const cfg = () => config ?? {};
   const env = () => buildEnv(cfg());
@@ -422,8 +428,15 @@ export function apply(ctx, config) {
             if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
             try {
               const body = await readJsonBody(req);
-              const result = writeMnemosyneConfigYaml(cfg().dataDir ?? DEFAULT_DATA_DIR, body);
-              sendJson(res, 200, result);
+              const dataDir = cfg().dataDir ?? DEFAULT_DATA_DIR;
+              const result = writeMnemosyneConfigYaml(dataDir, body);
+              // Hot-reload the config so changes take effect without restarting dsh
+              let reloadMsg = "";
+              try {
+                const cli = resolveCliPath();
+                if (cli) reloadMsg = await reloadMnemosyneConfig(cli, dataDir);
+              } catch { /* reload failure is non-fatal — file is still written */ }
+              sendJson(res, 200, { ...result, reload: reloadMsg.trim() });
             } catch (e) {
               sendJson(res, 500, { error: String(e?.message ?? e) });
             }
