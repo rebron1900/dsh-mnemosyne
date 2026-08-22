@@ -210,13 +210,15 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-chevron{color:var(--dsw-alias-label-tertiary);flex:none;transition:transform .16s;font-size:12px;line-height:1}' +
     '.mn-chevron-open{transform:rotate(180deg)}' +
     '.mn-body{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding-bottom:8px}' +
-    '.mn-field{content-visibility:auto;contain-intrinsic-size:auto 96px;flex-direction:column;gap:6px;padding:12px 0;display:flex}' +
+    '.mn-field{padding:12px 0;display:flex;align-items:flex-start;gap:16px}' +
     '.mn-field + .mn-field{border-top:1px solid var(--dsw-alias-border-l2)}' +
+    '.mn-field-left{flex:0 0 38%;min-width:0;display:flex;flex-direction:column;gap:3px;padding-top:6px}' +
+    '.mn-field-right{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}' +
     '.mn-field-head{align-items:center;gap:8px;display:flex}' +
-    '.mn-label{min-width:0;color:var(--dsw-alias-label-primary);flex:1;font-size:13px;font-weight:500;line-height:1.5}' +
-    '.mn-toggle{display:flex;align-items:center;gap:10px;justify-content:space-between;width:100%}' +
+    '.mn-label{min-width:0;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}' +
+    '.mn-toggle{display:flex;align-items:center;gap:10px;width:100%;padding-top:6px}' +
     '.mn-check{width:16px;height:16px;accent-color:var(--dsw-alias-brand-primary);cursor:pointer;margin:0}' +
-    '.mn-input{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);min-height:34px;font:inherit;color:var(--dsw-alias-label-primary);border-radius:8px;padding:6px 12px;font-size:13px;line-height:1.5;width:100%;box-sizing:border-box}' +
+    '.mn-input{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);min-height:34px;font:inherit;color:var(--dsw-alias-label-primary);border-radius:8px;padding:6px 12px;font-size:13px;line-height:1.5;width:100%;box-sizing:border-box;max-width:420px}' +
     '.mn-input:focus-visible{border-color:var(--dsw-alias-brand-primary);outline:none}' +
     '.mn-input:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}' +
     '.mn-area{resize:vertical;min-height:60px;font-family:monospace}' +
@@ -236,7 +238,8 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-status-row{font-size:13px;color:var(--dsw-alias-label-secondary);line-height:1.5}' +
     '.mn-status-error{color:var(--dsw-alias-label-error);font-size:12px;line-height:1.5}' +
     '.mn-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0 4px}' +
-    '.mn-msg{font-size:12px;color:var(--dsw-alias-label-secondary);padding:4px 0}';
+    '.mn-msg{font-size:12px;color:var(--dsw-alias-label-secondary);padding:4px 0}' +
+    '@media(max-width:640px){.mn-field{flex-direction:column;gap:6px}.mn-field-left{flex:none;padding-top:0}}';
 
   let stylesInstalled = false;
   function installStyles() {
@@ -392,13 +395,19 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const renderField = (f) => {
       const val = format(f.key);
       const isOverridden = f.key in drafts;
+      // Toggle: label on left, checkbox on right — same row
       if (f.type === "toggle") {
         return h("div", { className: "mn-field", key: f.key },
-          h("div", { className: "mn-toggle" },
-            h("span", { className: "mn-label" }, t(f.label)),
+          h("div", { className: "mn-field-left" },
+            h("div", { className: "mn-field-head" },
+              h("span", { className: "mn-label" }, t(f.label)),
+              isOverridden ? h("button", { type: "button", className: "mn-btn", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => resetField(f.key) }, t("reset")) : null,
+            ),
+            f.hint ? h("p", { className: "mn-hint" }, t(f.hint)) : null,
+          ),
+          h("div", { className: "mn-field-right", style: { paddingTop: 8 } },
             h("input", { type: "checkbox", className: "mn-check", checked: val === true, onChange: (e) => setDraft(f.key, e.target.checked) }),
           ),
-          f.hint ? h("p", { className: "mn-hint" }, t(f.hint)) : null,
         );
       }
       const inputType = f.type === "number" ? "number" : f.secret ? "password" : "text";
@@ -409,12 +418,16 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       };
       if (f.type === "area") inputProps.rows = 3;
       return h("div", { className: "mn-field", key: f.key },
-        h("div", { className: "mn-field-head" },
-          h("span", { className: "mn-label" }, t(f.label)),
-          isOverridden ? h("button", { type: "button", className: "mn-btn", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => resetField(f.key) }, t("reset")) : null,
+        h("div", { className: "mn-field-left" },
+          h("div", { className: "mn-field-head" },
+            h("span", { className: "mn-label" }, t(f.label)),
+            isOverridden ? h("button", { type: "button", className: "mn-btn", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => resetField(f.key) }, t("reset")) : null,
+          ),
+          f.hint ? h("p", { className: "mn-hint" }, t(f.hint)) : null,
         ),
-        f.type === "area" ? h("textarea", inputProps) : h("input", { type: inputType, ...inputProps }),
-        f.hint ? h("p", { className: "mn-hint" }, t(f.hint)) : null,
+        h("div", { className: "mn-field-right" },
+          f.type === "area" ? h("textarea", inputProps) : h("input", { type: inputType, ...inputProps }),
+        ),
       );
     };
 
