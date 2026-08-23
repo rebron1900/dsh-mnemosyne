@@ -354,7 +354,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const getSnapshot = useMemo(() => (scope ? scope.getSnapshot.bind(scope) : () => ({})), [scope]);
     const config = useSyncExternalStore(subscribe, getSnapshot);
 
-    const [cardOpen, setCardOpen] = useState({ status: true, groupPlugin: true });
+    const [cardOpen, setCardOpen] = useState({ status: true, groupPlugin: true, groupAuto: true });
     const [drafts, setDrafts] = useState({});
     const [saving, setSaving] = useState(false);
     const [failedFields, setFailedFields] = useState([]);
@@ -516,7 +516,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       for (const f of FIELDS) { if (!map[f.group]) map[f.group] = []; map[f.group].push(f); }
       return map;
     }, []);
-    const groupOrder = ["groupPlugin", "groupEmbedding", "groupLLM", "groupRecall", "groupWM"];
+    const groupOrder = ["groupPlugin", "groupAuto", "groupEmbedding", "groupLLM", "groupRecall", "groupWM"];
 
     const renderField = (f) => {
       const val = format(f.key);

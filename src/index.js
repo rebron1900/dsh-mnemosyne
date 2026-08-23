@@ -469,6 +469,9 @@ function createUserMessage(input) {
 
 export function apply(ctx, config) {
   const cfg = () => config ?? {};
+  // Dynamic config: updated by settings watch, read by auto-memory features
+  let dynamicCfg = { ...cfg() };
+  let settingsScope = null;
   const env = () => buildEnv(cfg());
   // Numeric guardrails at the trust boundary (model args + user config).
   const clampNum = (v, fallback, min, max) => {
@@ -496,9 +499,25 @@ export function apply(ctx, config) {
   // settingsScope can read/write config. Hard-dep via ctx.inject (not soft
   // ctx.get) — same pattern as dsh-vision-router, ensures registration fires
   // once the settings service is available.
+  // The returned SettingsScope provides watch() to receive dynamic updates
+  // when the user toggles auto-memory features via the panel.
   ctx.inject(["settings"], (sctx) => {
     sctx.effect(
-      () => sctx.settings.register("mnemosyne", Config, { base: cfg() }),
+      () => {
+        const scope = sctx.settings.register("mnemosyne", Config, { base: cfg() });
+        settingsScope = scope;
+        // Read the resolved value (merges schema defaults + base + user document)
+        if (scope && typeof scope.get === "function") {
+          const resolved = scope.get();
+          if (resolved) dynamicCfg = { ...cfg(), ...resolved };
+        }
+        // Watch for panel changes and update dynamicCfg in real-time
+        if (scope && typeof scope.watch === "function") {
+          return scope.watch((next) => {
+            dynamicCfg = { ...cfg(), ...next };
+          });
+        }
+      },
       "mnemosyne: settings namespace"
     );
   });
@@ -506,23 +525,39 @@ export function apply(ctx, config) {
   // --- system prompt section (opt-in) ---
   // When promptSection is enabled, inject a static "# Mnemosyne Memory" section
   // into the system prompt so the model knows memory tools are available.
+  // Re-evaluated on settings change via dynamicCfg.
   const systemPrompt = ctx.get("systemPrompt");
   if (systemPrompt) {
-    if (cfg().promptSection) {
-      ctx.effect(
-        () => systemPrompt.section({
+    const sectionText = (
+      "# Mnemosyne Memory\n" +
+      "Mnemosyne local memory is active. Use mnemosyne_remember to store durable facts, preferences, or insights. " +
+      "Use mnemosyne_recall to search memories by semantic similarity. Use mnemosyne_forget to delete outdated memories. " +
+      "Use mnemosyne_stats to check memory status. Use mnemosyne_sleep to consolidate working memories into long-term summaries."
+    );
+    let sectionDisposer = null;
+    const updateSection = () => {
+      const want = dynamicCfg.promptSection === true;
+      if (want && !sectionDisposer) {
+        sectionDisposer = systemPrompt.section({
           name: "mnemosyne-memory",
           order: 95,
-          text: (
-            "# Mnemosyne Memory\n" +
-            "Mnemosyne local memory is active. Use mnemosyne_remember to store durable facts, preferences, or insights. " +
-            "Use mnemosyne_recall to search memories by semantic similarity. Use mnemosyne_forget to delete outdated memories. " +
-            "Use mnemosyne_stats to check memory status. Use mnemosyne_sleep to consolidate working memories into long-term summaries."
-          ),
-        }),
-        "mnemosyne: system prompt section"
-      );
-    }
+          text: sectionText,
+        });
+      } else if (!want && sectionDisposer) {
+        sectionDisposer();
+        sectionDisposer = null;
+      }
+    };
+    // Initial registration
+    updateSection();
+    // Re-evaluate when settings change
+    ctx.inject(["settings"], (sctx) => {
+      sctx.effect(() => {
+        if (settingsScope && typeof settingsScope.watch === "function") {
+          return settingsScope.watch(() => updateSection());
+        }
+      }, "mnemosyne: system prompt section watcher");
+    });
   }
 
   // HTTP routes for the client panel (Client→Host via fetch). Soft-dep on
@@ -646,11 +681,13 @@ export function apply(ctx, config) {
   // --- session/event listeners ---
   // (1) Auto-sync: store user/assistant messages to Mnemosyne after each turn.
   //     (2) Auto-sleep: consolidate when working memory exceeds threshold.
+  // Both read dynamicCfg (updated by settings watch) so panel toggles take effect
+  // without a DSH restart.
   let autoSleepInFlight = false;
   ctx.effect(() =>
     ctx.on("session/event", async (_session, event) => {
       // --- auto-sync: store conversation to episodic memory ---
-      if (cfg().autoSync) {
+      if (dynamicCfg.autoSync) {
         try {
           if (event?.type === "user/message") {
             // Skip plugin-injected messages (e.g. our own prefetch) to avoid feedback loops
@@ -812,13 +849,18 @@ export function apply(ctx, config) {
   // --- agent/pre-step prefetch (opt-in) ---
   // When autoPrefetch is enabled, recall relevant memories before each model
   // step and inject them as a sourced user/message into the conversation.
-  if (cfg().autoPrefetch) {
+  // The listener is always registered; it checks dynamicCfg.autoPrefetch at
+  // runtime so panel toggles take effect without a DSH restart.
+  {
     // Track queries already prefetched in the current turn to avoid repetition.
     const prefetchedQueries = new Set();
     let lastPrefetchTurn = -1;
 
     ctx.effect(() =>
       ctx.on("agent/pre-step", async ({ agent, messages, turn, step, signal }, next) => {
+        // Check dynamic config at runtime — panel toggle takes effect immediately
+        if (!dynamicCfg.autoPrefetch) return next();
+
         // Reset dedup set on turn change
         if (lastPrefetchTurn !== turn) {
           prefetchedQueries.clear();
@@ -830,14 +872,14 @@ export function apply(ctx, config) {
 
         // Extract the latest user message text as the recall query
         const query = extractLastUserText(decision.messages);
-        const minLen = cfg().prefetchMinQueryLen ?? 8;
+        const minLen = dynamicCfg.prefetchMinQueryLen ?? 8;
         if (!query || query.length < minLen) return decision;
         // Skip if we already prefetched this exact query in this turn
         if (prefetchedQueries.has(query)) return decision;
         prefetchedQueries.add(query);
 
         try {
-          const topK = Math.floor(clampNum(cfg().prefetchTopK ?? 5, topKLimit(), 1, 100));
+          const topK = Math.floor(clampNum(dynamicCfg.prefetchTopK ?? 5, topKLimit(), 1, 100));
           const result = await run("recall", recallArgs({ query, topK }, topKLimit()));
           // Skip if recall returned no hits (just "Results for: ..." with no ID lines)
           if (!result || !result.includes("ID:")) return decision;

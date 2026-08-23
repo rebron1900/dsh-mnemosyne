@@ -414,10 +414,12 @@ describe("automatic memory config defaults", () => {
     assert.equal(preStepListeners[0].opts?.prepend, true);
   });
 
-  it("does not register agent/pre-step listener when autoPrefetch is false", () => {
+  it("always registers agent/pre-step listener (gated at runtime by dynamicCfg)", () => {
     const { ctx, preStepListeners } = createMockCtx();
     apply(ctx, { autoPrefetch: false });
-    assert.equal(preStepListeners.length, 0);
+    // Listener is always registered now — it checks dynamicCfg.autoPrefetch at runtime
+    assert.equal(preStepListeners.length, 1);
+    assert.equal(preStepListeners[0].opts?.prepend, true);
   });
 
   it("always registers a session/event listener for auto-sleep", () => {
