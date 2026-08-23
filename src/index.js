@@ -61,7 +61,11 @@ export const inject = ["tools"];
 export const DEFAULT_DATA_DIR = join(homedir(), ".dsh", "mnemosyne");
 
 function expandPath(value) {
-  const path = String(value ?? DEFAULT_DATA_DIR);
+  // Treat null/undefined/empty-string as "use the default" so a cleared
+  // panel field never resolves to the process cwd. Expand a leading ~ to
+  // the user's home directory — the upstream mnemosyne CLI does NOT call
+  // expanduser() on MNEMOSYNE_DATA_DIR, so we must hand it an absolute path.
+  const path = value && String(value).trim() || DEFAULT_DATA_DIR;
   return resolvePath(path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path);
 }
 

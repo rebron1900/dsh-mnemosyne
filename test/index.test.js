@@ -177,6 +177,26 @@ describe("buildEnv", () => {
     const env = buildEnv({ dataDir: "~/.dsh/mnemosyne" }, {});
     assert.equal(env.MNEMOSYNE_DATA_DIR, join(homedir(), ".dsh", "mnemosyne"));
   });
+
+  it("expands a bare ~ to the real home directory", () => {
+    const env = buildEnv({ dataDir: "~" }, {});
+    assert.equal(env.MNEMOSYNE_DATA_DIR, homedir());
+  });
+
+  it("falls back to DEFAULT_DATA_DIR when dataDir is an empty string", () => {
+    const env = buildEnv({ dataDir: "" }, {});
+    assert.equal(env.MNEMOSYNE_DATA_DIR, DEFAULT_DATA_DIR);
+  });
+
+  it("falls back to DEFAULT_DATA_DIR when dataDir is only whitespace", () => {
+    const env = buildEnv({ dataDir: "   " }, {});
+    assert.equal(env.MNEMOSYNE_DATA_DIR, DEFAULT_DATA_DIR);
+  });
+
+  it("overwrites a tainted MNEMOSYNE_DATA_DIR inherited from base env", () => {
+    const env = buildEnv({}, { MNEMOSYNE_DATA_DIR: "~/.dsh/mnemosyne" });
+    assert.equal(env.MNEMOSYNE_DATA_DIR, DEFAULT_DATA_DIR);
+  });
 });
 
 describe("config.yaml write guard", () => {
