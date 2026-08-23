@@ -127,11 +127,10 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
   });
 
   it("the plugin's execute() closures drive the real CLI", async () => {
-    // apply() under a minimal host (no skills service) and the isolated env
-    // wired into process.env; the config pins the resolved absolute CLI path
-    // so execute() does not depend on PATH lookup.
+    // apply() under a minimal host (no skills service); dataDir pinned to the
+    // isolated env dir so nothing touches the user's real database.
     const { ctx, tools } = createMockCtx();
-    apply(ctx, { cli: CLI });
+    apply(ctx, { cli: CLI, dataDir });
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
 
     const marker = "it-execute-005 remembers to use uv for python";
@@ -146,5 +145,33 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
 
     const forgotten = await byName.mnemosyne_forget.execute({ id });
     assert.equal(forgotten, `Deleted: ${id}`);
+  });
+
+  it("sessionScope partitions memories per DSH session through the venv python helper", async () => {
+    const { ctx, tools } = createMockCtx();
+    apply(ctx, { cli: CLI, dataDir, sessionScope: true });
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    const execA = {
+      agent: { session: { id: "session-11111111-2222-3333-4444-555555555555", header: {} } },
+    };
+    const execB = {
+      agent: { session: { id: "session-99999999-8888-7777-6666-555555555555", header: {} } },
+    };
+
+    const marker = "it-scope-006 private fact for session A only";
+    const stored = await byName.mnemosyne_remember.execute({ content: marker, source: "dsh-it", importance: 0.8 }, execA);
+    const id = stored.trim();
+    assert.match(id, /^[0-9a-f]{16}$/);
+
+    // Same session recalls its own row; another session cannot see it.
+    const own = await byName.mnemosyne_recall.execute({ query: "private fact session", top_k: 5 }, execA);
+    assert.match(own, new RegExp(`ID: ${id}`));
+    const other = await byName.mnemosyne_recall.execute({ query: "private fact session", top_k: 5 }, execB);
+    assert.doesNotMatch(other, new RegExp(`ID: ${id}`));
+
+    // Forget is session-scoped too: session B cannot delete session A's row.
+    await assert.rejects(byName.mnemosyne_forget.execute({ id }, execB), /Memory not found/);
+    const deleted = await byName.mnemosyne_forget.execute({ id }, execA);
+    assert.equal(deleted, `Deleted: ${id}`);
   });
 });

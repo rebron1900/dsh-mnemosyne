@@ -136,6 +136,13 @@ export const Config = z.object({
   autoPrefetch: z.boolean().default(false).description("Automatically recall and inject relevant memories before each model step."),
   prefetchTopK: z.number().default(5).description("Number of memories to recall for auto-prefetch injection."),
   prefetchMinQueryLen: z.number().default(3).description("Minimum user-message length to trigger auto-prefetch (shorter messages are skipped)."),
+  // When true, memories are partitioned per DSH session via the engine's
+  // session_id column (Mnemosyne(session_id=...) in-process). All store/recall
+  // paths move to a per-session helper run through the mnemosyne venv python;
+  // auto-sleep consolidates all sessions. Existing rows live in the "default"
+  // session and become invisible to session-scoped recall — migrate before
+  // enabling.
+  sessionScope: z.boolean().default(false).description("Partition memories per DSH session (session_id). Off preserves the current shared 'default' namespace."),
 });
 
 // Embedding / LLM / recall-tuning / working-memory settings (noEmbeddings,
@@ -228,6 +235,102 @@ export function storeArgs({ content, source, importance }) {
 export function recallArgs({ query, topK }, defaultTopK) {
   return [query, String(topK ?? defaultTopK)];
 }
+
+/** Resolve the Python interpreter that owns the mnemosyne CLI (its shebang).
+ *  The CLI is usually a symlink into the uv tool venv, so dirname(cliPath)
+ *  does NOT contain the interpreter — only the shebang knows where it lives.
+ *  Returns null when the CLI is not a script with a usable shebang. */
+export function resolvePythonInterp(cli) {
+  if (!cli) return null;
+  try {
+    const shebang = readFileSync(cli, "utf8").split("\n")[0] ?? "";
+    const m = shebang.match(/^#!\s*(\S+)/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Derive a stable Mnemosyne session_id for a DSH session id.
+ *  "session-<uuid>" ids persist across restarts and are used as-is; the
+ *  per-process "session-<n>" counter resets every boot, so counter-form ids
+ *  get a boot-uuid suffix to stay unique across dsh process lifecycles. */
+export function deriveSessionSid(sessionId, bootUuid) {
+  if (!sessionId) return "default";
+  if (/^session-\d+$/.test(sessionId)) return `dsh_${sessionId}_${bootUuid}`;
+  return `dsh_${sessionId}`;
+}
+
+/** Walk a session's parentSession chain to its root ancestor (subagents bind
+ *  to the root session so delegated work shares the owner's memory). Cycle
+ *  guarded; sessions not in the live list break the walk. */
+export function findRootSession(session, allSessions) {
+  if (!session) return null;
+  const byId = new Map((allSessions ?? []).map((s) => [s.id, s]));
+  let cur = session;
+  const seen = new Set();
+  while (cur && cur.header?.parentSession && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const next = byId.get(cur.header.parentSession);
+    if (!next) break;
+    cur = next;
+  }
+  return cur;
+}
+
+/** Python helper run through the mnemosyne venv interpreter. Two/three-verb
+ *  entry point (store/recall/delete): the CLI has no session parameter, so
+ *  session-scoped access requires constructing Mnemosyne(session_id=...) in
+ *  process. Uses the Mnemosyne wrapper (not BeamMemory directly) so the write
+ *  classifier and trust-tier defaults still apply. Output parity with the CLI
+ *  is load-bearing — formatPrefetchContext and tool text parse the recall
+ *  block (ID:/Content:/Score:). */
+export const SESSION_HELPER = `import sys
+from mnemosyne.core.memory import Mnemosyne
+
+
+def main():
+    verb, sid = sys.argv[1], sys.argv[2]
+    mem = Mnemosyne(session_id=sid)
+    if verb == "store":
+        content, source, importance = sys.argv[3], sys.argv[4], float(sys.argv[5])
+        mid = mem.remember(
+            content,
+            source=source,
+            importance=importance,
+            scope="session",
+            extract_entities=True,
+        )
+        print(mid)
+    elif verb == "recall":
+        query, top_k = sys.argv[3], int(sys.argv[4])
+        results = mem.recall(query, top_k=top_k)
+        print()
+        print("Results for: %s" % query)
+        print()
+        for r in results:
+            content = r.get("content", "")
+            score = r.get("score", 0)
+            print("  ID: %s" % r.get("id", "?"))
+            print("  Content: %s%s" % (content[:150], "..." if len(content) > 150 else ""))
+            print("  Score: %.3f" % score)
+            if r.get("entity_match"):
+                print("  [entity match]")
+            print()
+    elif verb == "delete":
+        mid = sys.argv[3]
+        if mem.forget(mid):
+            print("Deleted: %s" % mid)
+        else:
+            print("Memory not found: %s" % mid, file=sys.stderr)
+            sys.exit(1)
+    else:
+        raise SystemExit("unknown verb: %s" % verb)
+
+
+if __name__ == "__main__":
+    main()
+`;
 
 /** Resolve a CLI name to an absolute path on PATH (with ~/.local/bin appended),
  *  or null if not found. */
@@ -408,9 +511,7 @@ export async function diagnoseMnemosyne(config) {
 export async function detectEmbeddingDeps(cli) {
   const result = { fastembed: false, sqliteVec: false, python: null };
   try {
-    const shebang = readFileSync(cli, "utf8").split("\n")[0] ?? "";
-    const m = shebang.match(/^#!\s*(\S+)/);
-    const python = m ? m[1] : null;
+    const python = resolvePythonInterp(cli);
     if (!python) return result;
     result.python = python;
     const script =
@@ -632,14 +733,14 @@ export function apply(ctx, config) {
   const run = (command, args) =>
     runMnemosyne(resolveCliPath(), command, args, callTimeout(), env());
 
-  // --- auto-memory config resolution (self-healing) ---
+// --- auto-memory config resolution (self-healing) ---
   // The loader config, the settings-service document, and settings.yaml can
   // disagree (loader caches entry configs; the settings document loads
   // asynchronously). The panel persists every toggle to settings.yaml, so that
   // file is treated as the ground truth for the auto keys; everything else is
   // a fallback layer under it. Re-synced on registration, settings watch,
   // document-updated events, and each pre-step / turn-end.
-  const AUTO_KEYS = ["promptSection", "autoSync", "autoPrefetch", "prefetchTopK", "prefetchMinQueryLen"];
+  const AUTO_KEYS = ["promptSection", "autoSync", "autoPrefetch", "prefetchTopK", "prefetchMinQueryLen", "sessionScope"];
   let settingsScope = null;
   let systemPromptService = null;
   let sectionDisposer = null;
@@ -660,6 +761,58 @@ export function apply(ctx, config) {
     const resolved = settingsScope && typeof settingsScope.get === "function" ? settingsScope.get() : undefined;
     const fileCfg = readSettingsFileAutoCfg();
     dynamicCfg = { ...cfg(), ...(resolved || {}), ...fileCfg };
+  };
+
+  // --- session-scoped memory (opt-in via sessionScope) ---
+  // bootUuid keeps counter-form session ids (session-<n>, reset per process)
+  // unique across dsh restarts. WeakMap holds no strong refs — no leak, and
+  // sessions are re-bound after disposal on the next event.
+  const bootUuid = randomUUID();
+  const sessionSids = new WeakMap();
+  let helperPath = null;
+  const ensureHelper = () => {
+    if (helperPath) return helperPath;
+    const dir = expandPath(cfg().dataDir);
+    mkdirSync(dir, { recursive: true });
+    helperPath = join(dir, "mnemosyne_session_helper.py");
+    try {
+      writeFileSync(helperPath, SESSION_HELPER, "utf8");
+    } catch { /* write failure surfaces as exec error */ }
+    return helperPath;
+  };
+  const sidFor = (session) => {
+    if (!session) return "default";
+    let sid = sessionSids.get(session);
+    if (!sid) {
+      const root = findRootSession(session, ctx.sessions?.list?.() ?? []);
+      sid = deriveSessionSid(root?.id ?? session.id, bootUuid);
+      sessionSids.set(session, sid);
+    }
+    return sid;
+  };
+  const agentSid = (exec) => sidFor(exec?.agent?.session);
+  // Run one helper verb (store/recall/delete) with a session id through the
+  // mnemosyne venv python. argv carries user content — execFile spawns no
+  // shell, so only NUL/arg-length boundaries apply (content is truncated).
+  const sessRun = (verb, args, sid) => {
+    const python = resolvePythonInterp(resolveCliPath());
+    if (!python) {
+      throw new Error(
+        "Cannot resolve the mnemosyne venv python from the CLI shebang. " +
+        "Reinstall the CLI via the Mnemosyne panel (Setup)."
+      );
+    }
+    return new Promise((resolve, reject) => {
+      execFile(
+        python,
+        [ensureHelper(), verb, sid, ...args],
+        { timeout: callTimeout(), windowsHide: true, env: env(), maxBuffer: 16 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (error) reject(new Error(stderr.trim() || error.message));
+          else resolve(String(stdout).trim());
+        }
+      );
+    });
   };
 
   // Register the "mnemosyne" settings namespace so the client panel's
@@ -905,14 +1058,16 @@ export function apply(ctx, config) {
               const text = extractMessageText(event.data?.content);
               if (text && text.length > 5) {
                 const truncated = text.slice(0, 500);
-                await run("store", [truncated, "conversation", "0.5"]);
+                if (dynamicCfg.sessionScope) await sessRun("store", [truncated, "conversation", "0.5"], sidFor(_session));
+                else await run("store", [truncated, "conversation", "0.5"]);
               }
             }
           } else if (event?.type === "assistant/message") {
             const text = extractMessageText(event.data?.message?.content);
             if (text && text.length > 10) {
               const truncated = text.slice(0, 800);
-              await run("store", [truncated, "conversation", "0.15"]);
+              if (dynamicCfg.sessionScope) await sessRun("store", [truncated, "conversation", "0.15"], sidFor(_session));
+              else await run("store", [truncated, "conversation", "0.15"]);
             }
           }
         } catch {
@@ -939,7 +1094,11 @@ export function apply(ctx, config) {
         const m = stats.match(/Working memory:\s*(\d+)/);
         const count = m ? Number(m[1]) : 0;
         if (count >= threshold) {
-          await runMnemosyne(cli, "sleep", [], sleepTimeout, e);
+          // Without --all-sessions, sleep only consolidates the constructing
+          // instance's session ("default") — per-session rows would never be
+          // consolidated otherwise.
+          const sleepArgs = dynamicCfg.sessionScope ? ["--all-sessions"] : [];
+          await runMnemosyne(cli, "sleep", sleepArgs, sleepTimeout, e);
         }
       } catch {
         // Auto-sleep failures are non-fatal — don't disrupt the session
@@ -964,12 +1123,18 @@ export function apply(ctx, config) {
               importance: { type: "number", description: "Importance score 0.0-1.0; higher ranks higher in recall." },
             },
             output: TEXT_OUTPUT,
-            async execute(args) {
-              return run("store", storeArgs({
+            async execute(args, exec) {
+              const payload = {
                 content: String(args?.content ?? ""),
                 source: args?.source === undefined ? undefined : String(args.source),
                 importance: args?.importance == null ? undefined : clampNum(args.importance, 0.5, 0, 1),
-              }));
+              };
+              if (!dynamicCfg.sessionScope) return run("store", storeArgs(payload));
+              return sessRun(
+                "store",
+                [payload.content, payload.source ?? "dsh", String(payload.importance ?? 0.5)],
+                agentSid(exec)
+              );
             },
           })
         ),
@@ -988,9 +1153,10 @@ export function apply(ctx, config) {
               top_k: { type: "number", description: `Maximum results to return (default: ${topKLimit()}).` },
             },
             output: TEXT_OUTPUT,
-            async execute(args) {
+            async execute(args, exec) {
               const topK = args?.top_k == null ? undefined : Math.floor(clampNum(args.top_k, topKLimit(), 1, 100));
-              return run("recall", recallArgs({ query: String(args?.query ?? ""), topK }, topKLimit()));
+              if (!dynamicCfg.sessionScope) return run("recall", recallArgs({ query: String(args?.query ?? ""), topK }, topKLimit()));
+              return sessRun("recall", [String(args?.query ?? ""), String(topK ?? topKLimit())], agentSid(exec));
             },
           })
         ),
@@ -1006,8 +1172,10 @@ export function apply(ctx, config) {
               "Delete a memory from Mnemosyne by its ID. Use when the user asks to remove outdated or incorrect information.",
             parameters: { id: { type: "string", required: true, description: "The memory ID returned by mnemosyne_remember." } },
             output: TEXT_OUTPUT,
-            async execute(args) {
-              return run("delete", [String(args?.id ?? "")]);
+            async execute(args, exec) {
+              const id = String(args?.id ?? "");
+              if (!dynamicCfg.sessionScope) return run("delete", [id]);
+              return sessRun("delete", [id], agentSid(exec));
             },
           })
         ),
@@ -1040,7 +1208,7 @@ export function apply(ctx, config) {
             parameters: {},
             output: TEXT_OUTPUT,
             async execute() {
-              return run("sleep", []);
+              return run("sleep", dynamicCfg.sessionScope ? ["--all-sessions"] : []);
             },
           })
         ),
@@ -1088,7 +1256,9 @@ export function apply(ctx, config) {
 
         try {
           const topK = Math.floor(clampNum(dynamicCfg.prefetchTopK ?? 5, topKLimit(), 1, 100));
-          const result = await run("recall", recallArgs({ query, topK }, topKLimit()));
+          const result = dynamicCfg.sessionScope
+            ? await sessRun("recall", [query, String(topK)], sidFor(agent?.session))
+            : await run("recall", recallArgs({ query, topK }, topKLimit()));
           // Skip if recall returned no hits (just "Results for: ..." with no ID lines)
           if (!result || !result.includes("ID:")) return decision;
 

@@ -1,7 +1,7 @@
 import { describe, it, mock, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -29,6 +29,10 @@ import {
   getReindexStatus,
   formatPrefetchContext,
   parseSettingsAutoSection,
+  resolvePythonInterp,
+  deriveSessionSid,
+  findRootSession,
+  SESSION_HELPER,
 } from "../src/index.js";
 
 // Unit tests must not read the developer's real ~/.dsh/settings.yaml
@@ -105,6 +109,54 @@ describe("argument builders", () => {
   it("recall falls back to the configured defaultTopK", () => {
     assert.deepEqual(recallArgs({ query: "q" }, 5), ["q", "5"]);
     assert.deepEqual(recallArgs({ query: "q", topK: 12 }, 5), ["q", "12"]);
+  });
+});
+
+describe("session scoping helpers", () => {
+  it("resolvePythonInterp parses the CLI shebang", () => {
+    const p = join(tmpdir(), `mn-cli-probe-${process.pid}-${Date.now()}`);
+    writeFileSync(p, "#!/home/venv/bin/python\nimport sys\n", { mode: 0o755 });
+    assert.equal(resolvePythonInterp(p), "/home/venv/bin/python");
+    writeFileSync(p, "plain text without shebang\n");
+    assert.equal(resolvePythonInterp(p), null);
+    assert.equal(resolvePythonInterp(join(tmpdir(), "no-such-file-xyz")), null);
+    assert.equal(resolvePythonInterp(null), null);
+    rmSync(p, { force: true });
+  });
+
+  it("deriveSessionSid keeps uuid sessions stable, namespaces counter sessions per boot", () => {
+    const boot = "boot-uuid-1";
+    assert.equal(
+      deriveSessionSid("session-b562b10b-a6c4-4689-96d1-5f4f4ee0454c", boot),
+      "dsh_session-b562b10b-a6c4-4689-96d1-5f4f4ee0454c"
+    );
+    assert.equal(deriveSessionSid("session-3", boot), "dsh_session-3_boot-uuid-1");
+    assert.equal(deriveSessionSid("session-3", "boot-uuid-2"), "dsh_session-3_boot-uuid-2");
+    assert.equal(deriveSessionSid("", boot), "default");
+    assert.equal(deriveSessionSid(undefined, boot), "default");
+  });
+
+  it("findRootSession walks parentSession to the root and guards cycles", () => {
+    const leaf = { id: "session-c", header: { parentSession: "session-b" } };
+    const mid = { id: "session-b", header: { parentSession: "session-a" } };
+    const root = { id: "session-a", header: {} };
+    assert.equal(findRootSession(leaf, [leaf, mid, root]), root);
+    // parent not in the live list → walk stops at the deepest known session
+    assert.equal(findRootSession(leaf, [leaf]), leaf);
+    // cycle guard terminates and returns a session
+    const cyc2 = { id: "c2", header: { parentSession: "c1" } };
+    const cyc1 = { id: "c1", header: { parentSession: "c2" } };
+    assert.ok(findRootSession(cyc1, [cyc1, cyc2]));
+    assert.equal(findRootSession(null, []), null);
+  });
+
+  it("SESSION_HELPER uses the Mnemosyne wrapper with a constructed session_id", () => {
+    assert.match(SESSION_HELPER, /from mnemosyne\.core\.memory import Mnemosyne/);
+    assert.match(SESSION_HELPER, /Mnemosyne\(session_id=sid\)/);
+    assert.doesNotMatch(SESSION_HELPER, /BeamMemory/);
+    for (const verb of ["store", "recall", "delete"]) {
+      assert.ok(SESSION_HELPER.includes(`verb == "${verb}"`), `helper covers verb ${verb}`);
+    }
   });
 });
 
