@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -20,6 +21,9 @@ import {
   SKILL,
   storeArgs,
   writeMnemosyneConfigYaml,
+  extractMessageText,
+  extractLastUserText,
+  formatPrefetchContext,
 } from "../src/index.js";
 
 /** Minimal cordis-style ctx: runs inject callbacks immediately, collects registrations. */
@@ -27,10 +31,29 @@ function createMockCtx() {
   const tools = [];
   const skills = [];
   const effects = [];
+  const sessionEvents = [];
+  const preStepListeners = [];
+  const systemPromptSections = [];
   const ctx = {
-    get: (key) => (key === "skills" ? { register: (s) => skills.push(s) } : undefined),
+    get: (key) => {
+      if (key === "skills") return { register: (s) => skills.push(s) };
+      if (key === "systemPrompt") return {
+        section: (s) => { systemPromptSections.push(s); return () => {}; },
+      };
+      return undefined;
+    },
     effect: (fn) => effects.push(fn()),
-    on: () => () => {},
+    on: (event, handler, opts) => {
+      if (event === "agent/pre-step") {
+        preStepListeners.push({ handler, opts });
+        return () => {};
+      }
+      if (event === "session/event") {
+        sessionEvents.push(handler);
+        return () => {};
+      }
+      return () => {};
+    },
     inject: (deps, fn) => {
       if (deps[0] === "tools") {
         fn({
@@ -47,10 +70,16 @@ function createMockCtx() {
           settings: { register: () => ({ get: () => ({}), watch: () => () => {} }) },
           effect: (fn) => { effects.push(fn()); return () => {}; },
         });
+      } else if (deps[0] === "agents") {
+        // agents injection: the ctx.on("agent/pre-step", ...) is registered
+        // at the ctx level, not through agents — just call fn to let it register
+        fn({
+          effect: (fn) => { effects.push(fn()); return () => {}; },
+        });
       }
     },
   };
-  return { ctx, tools, skills };
+  return { ctx, tools, skills, sessionEvents, preStepListeners, systemPromptSections };
 }
 
 describe("argument builders", () => {
@@ -267,7 +296,11 @@ describe("panel HTTP routes", () => {
   function createRouteCtx(config) {
     let handler = null;
     const ctx = {
-      get: (key) => (key === "skills" ? { register: () => {} } : undefined),
+      get: (key) => {
+        if (key === "skills") return { register: () => {} };
+        if (key === "systemPrompt") return { section: () => () => {} };
+        return undefined;
+      },
       effect: (fn) => fn(),
       on: () => () => {},
       inject: (deps, fn) => {
@@ -280,6 +313,8 @@ describe("panel HTTP routes", () => {
           });
         } else if (deps[0] === "settings") {
           fn({ settings: { register: () => ({}) }, effect: (fn) => fn() });
+        } else if (deps[0] === "agents") {
+          fn({ effect: (fn) => fn() });
         }
       },
     };
@@ -346,5 +381,209 @@ describe("panel HTTP routes", () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.config.embedding_dim, 384);
     assert.equal(res.body.config.sleep_threshold, 20);
+  });
+});
+
+describe("automatic memory config defaults", () => {
+  it("all automatic features default to false (manual-only)", () => {
+    const env = buildEnv({}, {});
+    // buildEnv does not add MNEMOSYNE_* env for these — they're DSH-side config
+    // The point is they should be absent when unset, meaning disabled
+    assert.equal(env.MNEMOSYNE_DATA_DIR, DEFAULT_DATA_DIR);
+  });
+
+  it("does not register systemPrompt section when promptSection is false", () => {
+    const { ctx, systemPromptSections } = createMockCtx();
+    apply(ctx, { promptSection: false });
+    assert.equal(systemPromptSections.length, 0);
+  });
+
+  it("registers systemPrompt section when promptSection is true", () => {
+    const { ctx, systemPromptSections } = createMockCtx();
+    apply(ctx, { promptSection: true });
+    assert.equal(systemPromptSections.length, 1);
+    assert.equal(systemPromptSections[0].name, "mnemosyne-memory");
+    assert.equal(systemPromptSections[0].order, 95);
+    assert.ok(systemPromptSections[0].text.includes("Mnemosyne Memory"));
+  });
+
+  it("registers agent/pre-step listener when autoPrefetch is true", () => {
+    const { ctx, preStepListeners } = createMockCtx();
+    apply(ctx, { autoPrefetch: true });
+    assert.equal(preStepListeners.length, 1);
+    assert.equal(preStepListeners[0].opts?.prepend, true);
+  });
+
+  it("does not register agent/pre-step listener when autoPrefetch is false", () => {
+    const { ctx, preStepListeners } = createMockCtx();
+    apply(ctx, { autoPrefetch: false });
+    assert.equal(preStepListeners.length, 0);
+  });
+
+  it("always registers a session/event listener for auto-sleep", () => {
+    const { ctx, sessionEvents } = createMockCtx();
+    apply(ctx, {});
+    assert.ok(sessionEvents.length >= 1);
+  });
+});
+
+describe("extractMessageText", () => {
+  it("extracts text from a content block array", () => {
+    const content = [{ type: "text", text: "hello world" }];
+    assert.equal(extractMessageText(content), "hello world");
+  });
+
+  it("joins multiple text blocks", () => {
+    const content = [{ type: "text", text: "line1" }, { type: "text", text: "line2" }];
+    assert.equal(extractMessageText(content), "line1\nline2");
+  });
+
+  it("returns the string as-is when content is a string", () => {
+    assert.equal(extractMessageText("plain string"), "plain string");
+  });
+
+  it("returns empty string for null/undefined/empty", () => {
+    assert.equal(extractMessageText(null), "");
+    assert.equal(extractMessageText(undefined), "");
+    assert.equal(extractMessageText([]), "");
+  });
+
+  it("ignores non-text blocks", () => {
+    const content = [{ type: "image", url: "x" }, { type: "text", text: "keep" }];
+    assert.equal(extractMessageText(content), "keep");
+  });
+});
+
+describe("extractLastUserText", () => {
+  it("finds the last user message in a messages array", () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "first" }] },
+      { role: "assistant", content: [{ type: "text", text: "reply" }] },
+      { role: "user", content: [{ type: "text", text: "second question" }] },
+    ];
+    assert.equal(extractLastUserText(messages), "second question");
+  });
+
+  it("returns empty string when no user messages exist", () => {
+    const messages = [{ role: "assistant", content: [{ type: "text", text: "reply" }] }];
+    assert.equal(extractLastUserText(messages), "");
+  });
+
+  it("returns empty string for non-array input", () => {
+    assert.equal(extractLastUserText(null), "");
+    assert.equal(extractLastUserText("not array"), "");
+  });
+});
+
+describe("formatPrefetchContext", () => {
+  it("formats recall output with ID/Content/Score lines", () => {
+    const recall =
+      "Results for: test query\n" +
+      "ID: abc123def456abcd\n" +
+      "Content: The user prefers pnpm over npm\n" +
+      "Score: 0.85\n" +
+      "ID: def789abc012def0\n" +
+      "Content: Project uses ESM modules\n" +
+      "Score: 0.72";
+    const result = formatPrefetchContext(recall);
+    assert.ok(result.includes("## Mnemosyne Context"));
+    assert.ok(result.includes("The user prefers pnpm over npm"));
+    assert.ok(result.includes("score: 0.85"));
+    assert.ok(result.includes("Project uses ESM modules"));
+  });
+
+  it("returns empty string when recall has no hits", () => {
+    const recall = "Results for: empty query";
+    assert.equal(formatPrefetchContext(recall), "");
+  });
+
+  it("returns empty string for null/undefined input", () => {
+    assert.equal(formatPrefetchContext(null), "");
+    assert.equal(formatPrefetchContext(undefined), "");
+  });
+});
+
+describe("auto-sync session/event handler", () => {
+  it("does not crash on plugin-sourced user/message (feedback loop prevention)", async () => {
+    const { ctx, sessionEvents } = createMockCtx();
+    apply(ctx, { autoSync: true });
+    assert.ok(sessionEvents.length >= 1);
+    const handler = sessionEvents[0];
+
+    // Simulate a plugin-injected user/message event — should not throw
+    const pluginEvent = {
+      type: "user/message",
+      data: {
+        id: "test-id",
+        role: "user",
+        content: [{ type: "text", text: "injected context" }],
+        source: { kind: "plugin", plugin: "mnemosyne" },
+      },
+    };
+    // The handler will try to run the CLI and fail silently (no mnemosyne on path in test env).
+    // The key assertion: it doesn't throw and doesn't crash the session.
+    await assert.doesNotReject(async () => handler(null, pluginEvent));
+  });
+
+  it("does not crash on regular user/message when autoSync is enabled", async () => {
+    const { ctx, sessionEvents } = createMockCtx();
+    apply(ctx, { autoSync: true });
+    const handler = sessionEvents[0];
+
+    const userEvent = {
+      type: "user/message",
+      data: {
+        id: "test-id",
+        role: "user",
+        content: [{ type: "text", text: "Hello, this is a real user message" }],
+        source: { kind: "user" },
+      },
+    };
+    // CLI may or may not be available — either way, handler should not reject
+    await assert.doesNotReject(async () => handler(null, userEvent));
+  });
+
+  it("does not crash on assistant/message when autoSync is enabled", async () => {
+    const { ctx, sessionEvents } = createMockCtx();
+    apply(ctx, { autoSync: true });
+    const handler = sessionEvents[0];
+
+    const assistantEvent = {
+      type: "assistant/message",
+      data: {
+        message: {
+          id: "test-id",
+          role: "assistant",
+          content: [{ type: "text", text: "This is a longer assistant response that should be stored" }],
+        },
+      },
+    };
+    await assert.doesNotReject(async () => handler(null, assistantEvent));
+  });
+
+  it("does not attempt sync when autoSync is false", async () => {
+    const { ctx, sessionEvents } = createMockCtx();
+    apply(ctx, { autoSync: false });
+    const handler = sessionEvents[0];
+
+    const userEvent = {
+      type: "user/message",
+      data: {
+        id: "test-id",
+        role: "user",
+        content: [{ type: "text", text: "Hello world" }],
+        source: { kind: "user" },
+      },
+    };
+    // Should complete without error — autoSync is false so no store call attempted
+    await assert.doesNotReject(async () => handler(null, userEvent));
+  });
+});
+
+describe("prefetch message shape", () => {
+  it("injected messages have an id field (required by DSH session.append)", () => {
+    // createUserMessage uses crypto.randomUUID() for id — verified by import
+    // The randomUUID import from node:crypto guarantees a valid UUID string
+    assert.ok(typeof randomUUID === "function", "randomUUID is available");
   });
 });

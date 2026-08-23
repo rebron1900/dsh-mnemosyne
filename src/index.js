@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { accessSync, constants, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import z from "@deepseek-ai/schemastery";
 
@@ -56,7 +57,7 @@ function readJsonBody(req, limit = 1 << 20) {
 
 export const name = "mnemosyne";
 
-export const inject = ["tools"];
+export const inject = ["tools", "agents"];
 
 export const DEFAULT_DATA_DIR = join(homedir(), ".dsh", "mnemosyne");
 
@@ -137,6 +138,21 @@ export const Config = z.object({
 
   // --- recall tuning ---
   polyphonicRecall: z.boolean().default(false).description("Route recall through PolyphonicRecallEngine (better phrasing tolerance, cross-scope risk on shared banks)."),
+
+  // --- automatic memory (opt-in; defaults preserve manual-only behavior) ---
+  // When true, a "# Mnemosyne Memory" section is injected into the system prompt
+  // on every assembly so the model knows memory is available and how to use it.
+  promptSection: z.boolean().default(false).description("Inject a '# Mnemosyne Memory' section into the system prompt telling the model that memory tools are available."),
+  // When true, user/assistant messages are automatically stored to Mnemosyne as
+  // episodic memory after each turn — the model no longer needs to call
+  // mnemosyne_remember manually for conversation context.
+  autoSync: z.boolean().default(false).description("Automatically store user/assistant messages to Mnemosyne after each turn (episodic memory)."),
+  // When true, relevant memories are recalled and injected into the conversation
+  // before each model step — the model sees prior context without calling
+  // mnemosyne_recall.
+  autoPrefetch: z.boolean().default(false).description("Automatically recall and inject relevant memories before each model step."),
+  prefetchTopK: z.number().default(5).description("Number of memories to recall for auto-prefetch injection."),
+  prefetchMinQueryLen: z.number().default(8).description("Minimum user-message length to trigger auto-prefetch (shorter messages are skipped)."),
 
   // --- working memory / sleep ---
   wmMaxItems: z.number().description("Max unconsolidated working-memory items before eviction."),
@@ -440,6 +456,17 @@ export async function reloadMnemosyneConfig(cliPath, dataDir, timeoutMs = 10_000
   return runMnemosyne(cliPath, "config", ["reload"], timeoutMs, env);
 }
 
+/** Create one identified, frozen user-role message for session injection.
+ *  Mirrors @deepseek-ai/dsh-llm's createUserMessage without adding a dependency. */
+function createUserMessage(input) {
+  const msg = Object.freeze({
+    ...input,
+    role: "user",
+    id: randomUUID(),
+  });
+  return msg;
+}
+
 export function apply(ctx, config) {
   const cfg = () => config ?? {};
   const env = () => buildEnv(cfg());
@@ -475,6 +502,28 @@ export function apply(ctx, config) {
       "mnemosyne: settings namespace"
     );
   });
+
+  // --- system prompt section (opt-in) ---
+  // When promptSection is enabled, inject a static "# Mnemosyne Memory" section
+  // into the system prompt so the model knows memory tools are available.
+  const systemPrompt = ctx.get("systemPrompt");
+  if (systemPrompt) {
+    if (cfg().promptSection) {
+      ctx.effect(
+        () => systemPrompt.section({
+          name: "mnemosyne-memory",
+          order: 95,
+          text: (
+            "# Mnemosyne Memory\n" +
+            "Mnemosyne local memory is active. Use mnemosyne_remember to store durable facts, preferences, or insights. " +
+            "Use mnemosyne_recall to search memories by semantic similarity. Use mnemosyne_forget to delete outdated memories. " +
+            "Use mnemosyne_stats to check memory status. Use mnemosyne_sleep to consolidate working memories into long-term summaries."
+          ),
+        }),
+        "mnemosyne: system prompt section"
+      );
+    }
+  }
 
   // HTTP routes for the client panel (Client→Host via fetch). Soft-dep on
   // webServer: headless/minimal hosts without a server simply skip these.
@@ -594,14 +643,40 @@ export function apply(ctx, config) {
     hostCtx.effect(() => () => disposers.forEach((d) => d?.()), "mnemosyne: http routes");
   });
 
-  // Auto-sleep on turn/end: when auto_sleep is enabled in config.yaml and
-  // working memory exceeds sleep_threshold, run `mnemosyne sleep` to
-  // consolidate. Reads from config.yaml (dataDir/config.yaml) so panel edits
-  // take effect without restart. In-flight gate: overlapping turn/end events
-  // must not stack concurrent stats/sleep subprocesses.
+  // --- session/event listeners ---
+  // (1) Auto-sync: store user/assistant messages to Mnemosyne after each turn.
+  //     (2) Auto-sleep: consolidate when working memory exceeds threshold.
   let autoSleepInFlight = false;
   ctx.effect(() =>
     ctx.on("session/event", async (_session, event) => {
+      // --- auto-sync: store conversation to episodic memory ---
+      if (cfg().autoSync) {
+        try {
+          if (event?.type === "user/message") {
+            // Skip plugin-injected messages (e.g. our own prefetch) to avoid feedback loops
+            const source = event.data?.source;
+            if (source && typeof source === "object" && source.kind === "plugin") {
+              // fall through to auto-sleep check below
+            } else {
+              const text = extractMessageText(event.data?.content);
+              if (text && text.length > 5) {
+                const truncated = text.slice(0, 500);
+                await run("store", [truncated, "conversation", "0.5"]);
+              }
+            }
+          } else if (event?.type === "assistant/message") {
+            const text = extractMessageText(event.data?.message?.content);
+            if (text && text.length > 10) {
+              const truncated = text.slice(0, 800);
+              await run("store", [truncated, "conversation", "0.15"]);
+            }
+          }
+        } catch {
+          // Auto-sync failures are non-fatal — don't disrupt the session
+        }
+      }
+
+      // --- auto-sleep on turn/end ---
       if (event?.type !== "turn/end") return;
       if (autoSleepInFlight) return;
       autoSleepInFlight = true;
@@ -628,7 +703,7 @@ export function apply(ctx, config) {
         autoSleepInFlight = false;
       }
     }),
-    "mnemosyne: auto-sleep on turn/end"
+    "mnemosyne: session/event (auto-sync + auto-sleep)"
   );
 
   ctx.inject(["tools"], (sctx) => {
@@ -733,6 +808,115 @@ export function apply(ctx, config) {
   if (skills) {
     ctx.effect(() => skills.register(SKILL), "mnemosyne: skill");
   }
+
+  // --- agent/pre-step prefetch (opt-in) ---
+  // When autoPrefetch is enabled, recall relevant memories before each model
+  // step and inject them as a sourced user/message into the conversation.
+  if (cfg().autoPrefetch) {
+    // Track queries already prefetched in the current turn to avoid repetition.
+    const prefetchedQueries = new Set();
+    let lastPrefetchTurn = -1;
+
+    ctx.effect(() =>
+      ctx.on("agent/pre-step", async ({ agent, messages, turn, step, signal }, next) => {
+        // Reset dedup set on turn change
+        if (lastPrefetchTurn !== turn) {
+          prefetchedQueries.clear();
+          lastPrefetchTurn = turn;
+        }
+
+        const decision = await next();
+        if (decision.kind === "reject" || signal.aborted) return decision;
+
+        // Extract the latest user message text as the recall query
+        const query = extractLastUserText(decision.messages);
+        const minLen = cfg().prefetchMinQueryLen ?? 8;
+        if (!query || query.length < minLen) return decision;
+        // Skip if we already prefetched this exact query in this turn
+        if (prefetchedQueries.has(query)) return decision;
+        prefetchedQueries.add(query);
+
+        try {
+          const topK = Math.floor(clampNum(cfg().prefetchTopK ?? 5, topKLimit(), 1, 100));
+          const result = await run("recall", recallArgs({ query, topK }, topKLimit()));
+          // Skip if recall returned no hits (just "Results for: ..." with no ID lines)
+          if (!result || !result.includes("ID:")) return decision;
+
+          const contextText = formatPrefetchContext(result);
+          if (!contextText) return decision;
+
+          return {
+            kind: "enter",
+            messages: [...decision.messages, createUserMessage({
+              content: [{ type: "text", text: contextText }],
+              source: {
+                kind: "plugin",
+                plugin: "mnemosyne",
+                form: "snapshot",
+                sections: [{ name: "mnemosyne-prefetch", text: contextText }],
+              },
+            })],
+          };
+        } catch {
+          // Prefetch failures are non-fatal — proceed without injected context
+          return decision;
+        }
+      }, { prepend: true }),
+      "mnemosyne: agent/pre-step prefetch"
+    );
+  }
+}
+
+// --- helpers for auto-sync and auto-prefetch ---
+
+/** Extract plain text from a message content array (handles text blocks and strings). */
+export function extractMessageText(content) {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block) => block && typeof block === "object" && block.type === "text")
+    .map((block) => block.text || "")
+    .join("\n")
+    .trim();
+}
+
+/** Extract the last user message text from a messages array for prefetch query. */
+export function extractLastUserText(messages) {
+  if (!Array.isArray(messages)) return "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg && msg.role === "user") {
+      return extractMessageText(msg.content);
+    }
+  }
+  return "";
+}
+
+/** Format a recall result string into a memory-context block for prompt injection. */
+export function formatPrefetchContext(recallOutput) {
+  if (!recallOutput || typeof recallOutput !== "string") return "";
+  const lines = recallOutput.split("\n").filter((l) => l.trim());
+  // Expect lines like "ID: <hex>", "Content: ...", "Score: 0.xx"
+  const memories = [];
+  let current = null;
+  for (const line of lines) {
+    if (line.startsWith("ID:")) {
+      if (current) memories.push(current);
+      current = { id: line.slice(3).trim(), content: "", score: "" };
+    } else if (line.startsWith("Content:")) {
+      if (current) current.content = line.slice(8).trim();
+    } else if (line.startsWith("Score:")) {
+      if (current) current.score = line.slice(6).trim();
+    }
+  }
+  if (current) memories.push(current);
+  if (memories.length === 0) return "";
+
+  const entries = memories
+    .map((m) => `  • ${m.content}${m.score ? ` (score: ${m.score})` : ""}`)
+    .join("\n");
+  return `## Mnemosyne Context\nRelevant memories recalled for this turn:\n${entries}`;
 }
 
 export const SKILL = {
@@ -771,6 +955,16 @@ This skill ships inside the \`dsh-mnemosyne\` plugin. Data lives under \`~/.dsh/
 - Recall before starting work on a new but related task.
 - Forget stale or incorrect memories when the user corrects you.
 - Run \`mnemosyne_sleep\` occasionally to compress old working memories.
+
+## Automatic memory (opt-in)
+
+The plugin can automate memory operations. These are **disabled by default** — enable them in the Settings panel:
+
+- **Prompt section** — Injects a "# Mnemosyne Memory" header into the system prompt so the model knows memory is available.
+- **Auto-sync** — Automatically stores user/assistant messages to Mnemosyne after each turn, so conversation context persists without manual \`mnemosyne_remember\` calls.
+- **Auto-prefetch** — Recalls relevant memories before each model step and injects them into the conversation, so the model sees prior context without calling \`mnemosyne_recall\`.
+
+When all three are disabled (the default), behavior is identical to manual-only: the model must explicitly call the memory tools.
 
 ## Installation
 

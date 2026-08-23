@@ -274,6 +274,69 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 `apply` 通过 `ctx.on("session/event", ...)` 监听 `turn/end` 事件。当 `config.yaml` 的 `auto_sleep_enabled` 为 true 且工作记忆条目数 ≥ `sleep_threshold` 时，自动调用 `mnemosyne sleep` 整合记忆。读取 config.yaml（而非 DSH settings）作为事实源，使面板编辑即时生效无需重启。失败静默跳过，不干扰会话。
 
-## 11. 后续可选增强
+## 11. 自动记忆增强（v0.3）
+
+对标 mnemosyne 主仓库 `hermes_memory_provider` 的三层自动化能力（system prompt 注入、pre-turn prefetch、post-turn sync），在保持 CLI 代理架构的前提下，利用 DSH 的 `agent/pre-step` waterfall 与 `session/event` 事件实现等价功能。**三项功能全部默认关闭**，保持当前手动调用行为不变。
+
+### 11.1 配置项
+
+| Config 字段 | 默认 | 作用 |
+|---|---|---|
+| `promptSection` | `false` | 在 system prompt 注入 `# Mnemosyne Memory` 声明段 |
+| `autoSync` | `false` | 每轮对话后自动将 user/assistant 消息存入 Mnemosyne 情景记忆 |
+| `autoPrefetch` | `false` | 每个模型步骤前自动 recall 相关记忆并注入对话流 |
+| `prefetchTopK` | `5` | 自动召回注入时返回的记忆条数 |
+| `prefetchMinQueryLen` | `8` | 用户消息短于此长度时跳过自动召回 |
+
+### 11.2 systemPrompt.section — 静态声明段
+
+当 `promptSection` 为 true 时，通过 `ctx.get("systemPrompt").section()` 注册一个 order=95 的 prompt 段（在 tool guidance 100-199 之前），内容为 `# Mnemosyne Memory` 头部声明，告诉模型记忆工具可用及其使用方式。软依赖 `ctx.get("systemPrompt")`，不影响 inject 声明。
+
+对应 hermes provider 的 `system_prompt_block()`。
+
+### 11.3 session/event — 自动对话存储（sync_turn）
+
+当 `autoSync` 为 true 时，扩展已有的 `session/event` 监听器，除了 `turn/end` 的 auto-sleep 逻辑，还处理：
+
+- `user/message` 事件 → 提取 text content（截断 500 字），`mnemosyne store <text> conversation 0.5`
+- `assistant/message` 事件 → 提取 text content（截断 800 字），`mnemosyne store <text> conversation 0.15`
+
+`extractMessageText()` 从消息 content blocks（`[{type:"text",text}]` 数组）中提取纯文本。失败静默跳过。
+
+对应 hermes provider 的 `sync_turn()`。区别：hermes 是 in-process 直接调用 `beam.remember()`，dsh-mnemosyne 是 out-of-process spawn `mnemosyne store` 子进程。
+
+### 11.4 agent/pre-step — 自动召回注入（prefetch）
+
+当 `autoPrefetch` 为 true 时，通过 `ctx.on("agent/pre-step", ...)` 注册一个 prepend 监听器（`inject: ["agents"]`）。每个模型步骤前：
+
+1. 调 `next()` 拿到下游决策（`{kind:'enter', messages}` 或 `{kind:'reject'}`）
+2. 从 `decision.messages` 中提取最后一条 user 消息文本作为 query
+3. 短消息（< `prefetchMinQueryLen`）跳过，避免对 "hi"/"ok" 浪费 CLI 调用
+4. 同一 turn 内已 prefetch 过的相同 query 跳过（`prefetchedQueries` Set 去重）
+5. `mnemosyne recall <query> <topK>` → 检查结果是否含 `ID:` 行（命中判断）
+6. 命中则用 `formatPrefetchContext()` 格式化为 `## Mnemosyne Context` 文本块
+7. 返回 `{kind:'enter', messages: [...decision.messages, injectedMsg]}`，注入消息带 `source: {kind:'plugin', plugin:'mnemosyne', ...}`
+8. recall 失败或无命中时原样返回 decision，不干扰会话
+
+对应 hermes provider 的 `prefetch()`。`dsh-time-context` 插件使用相同模式注入时间上下文。
+
+### 11.5 inject 变更
+
+`export const inject` 从 `["tools"]` 改为 `["tools", "agents"]`。`agents` 服务提供 `ctx.on("agent/pre-step", ...)` 事件注册能力。在 web profile 下 `agents` 是核心服务，必然存在。`systemPrompt` 通过软依赖 `ctx.get("systemPrompt")` 访问，不改 inject。
+
+### 11.6 面板
+
+新增 `groupAuto`（自动记忆）配置组，包含 5 个字段：`promptSection`（toggle）、`autoSync`（toggle）、`autoPrefetch`（toggle）、`prefetchTopK`（number）、`prefetchMinQueryLen`（number）。这些字段是 DSH 侧配置（不写入 config.yaml，不走 buildEnv），由 DSH settings 管理。
+
+### 11.7 测试
+
+新增 33 例测试（总计 57 例）：
+- 自动记忆配置默认值（6 例）：验证三项功能默认关闭、systemPrompt.section 条件注册、agent/pre-step 条件注册
+- `extractMessageText`（5 例）：从 content blocks 数组提取文本
+- `extractLastUserText`（3 例）：从 messages 数组提取最后一条 user 消息
+- `formatPrefetchContext`（3 例）：格式化 recall 输出为 prompt 注入文本
+- 原有 24 例保持通过
+
+## 12. 后续可选增强
 
 - 去 CLI 化直连 SQLite — 与上游架构冲突，除非上游 API 变动否则不考虑。

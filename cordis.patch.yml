@@ -9,3 +9,9 @@
         defaultTopK: 5
         timeoutMs: 20000
         dataDir: ~/.dsh/mnemosyne
+        # Automatic memory features (all default false — manual-only by default)
+        promptSection: false
+        autoSync: false
+        autoPrefetch: false
+        prefetchTopK: 5
+        prefetchMinQueryLen: 8

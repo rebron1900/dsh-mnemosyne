@@ -28,6 +28,10 @@ Mnemosyne 支持 MCP、Python SDK 及多种 agent 框架（Claude Code、Cursor�
 - **配置同步**：面板从扁平的 `config.yaml` 读取 mnemosyne 实际配置，空值字段显示默认值 placeholder；保存后自动执行 `mnemosyne config reload`
 - **默认值恢复**：面板底部支持将面板管理的配置恢复为 mnemosyne 默认值
 - **自动整理**：每次 `turn/end` 检查工作记忆数量，达到阈值时自动执行 `mnemosyne sleep`
+- **自动记忆（可选开启）**：三项可选功能自动化记忆操作——全部默认关闭，保持手动调用行为不变：
+  - **Prompt 声明段** — 在 system prompt 注入 `# Mnemosyne Memory` 头部，让模型知道记忆工具可用
+  - **自动存储对话** — 每轮对话后自动将 user/assistant 消息存入 Mnemosyne，无需模型主动调用 `mnemosyne_remember`
+  - **自动召回注入** — 每个模型步骤前自动 recall 相关记忆并注入对话流，模型无需调用 `mnemosyne_recall` 即可看到先验上下文
 
 ## 安装
 
@@ -64,6 +68,9 @@ dsh plugin --profile web add ./dsh-mnemosyne
 | 召回 | `polyphonicRecall` | config.yaml `polyphonic_recall` |
 | 工作记忆 | `wmMaxItems` / `wmTtlHours` | config.yaml `wm_*` |
 | 工作记忆 | `autoSleep` / `sleepThreshold` / `ignorePatterns` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` |
+| 自动记忆 | `promptSection` / `autoSync` / `autoPrefetch` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
+
+> **注意**：自动记忆字段是 DSH 侧配置（通过设置面板保存，不写入 `config.yaml`）。修改后需重启 DSH 才能生效，因为它们在启动时控制插件钩子的注册。
 
 面板保存会写入对应配置文件，并执行 `mnemosyne config reload`。底部"恢复默认配置"会将面板管理的配置恢复为 mnemosyne 默认值；更多未展示的配置可以直接编辑 `~/.dsh/mnemosyne/config.yaml`。除 `vec_type` 等启动时确定的配置外，大部分配置支持热加载。
 
@@ -72,7 +79,8 @@ dsh plugin --profile web add ./dsh-mnemosyne
 ```
 ┌──────────────────────────────────────┐
 │           DSH Agent Session          │
-│  (tools + skill + session/event)     │
+│  (tools + skill + session/event +    │
+│   agent/pre-step + systemPrompt)     │
 └──────────────┬───────────────────────┘
                │ execFile (no shell)
 ┌──────────────▼───────────────────────┐
@@ -101,7 +109,7 @@ dsh plugin --profile web add ./dsh-mnemosyne
 
 ```bash
 pnpm install
-pnpm test        # node --test（36 例：单元 + 集成 + client）
+pnpm test        # node --test（62 例：单元 + 集成 + client）
 ```
 
 ## License

@@ -51,6 +51,18 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       groupRecall_hint: "默认召回路径有词法门槛——长查询（4+词）需 30% 词面匹配才进入向量打分，对话式提问容易被误杀。开启多义召回可让向量证据单独准入，改善语义匹配。",
       groupWM: "工作记忆",
       groupWM_hint: "工作记忆是短期热数据层。auto_sleep / sleep_threshold / ignore_patterns 是 config.yaml 键（mnemosyne CLI 读取 dataDir/config.yaml），其余为环境变量。",
+      groupAuto: "自动记忆",
+      groupAuto_hint: "自动记忆功能默认全部关闭，保持手动调用模式。开启后插件自动存储对话、注入记忆上下文，无需模型主动调用 mnemosyne 工具。",
+      f_promptSection: "Prompt 声明段",
+      f_promptSection_hint: "在 system prompt 注入 '# Mnemosyne Memory' 段，告诉模型记忆工具可用。仅在需要提醒模型记忆存在时开启。",
+      f_autoSync: "自动存储对话",
+      f_autoSync_hint: "每轮对话后自动将 user/assistant 消息存入 Mnemosyne 情景记忆，无需模型主动调用 mnemosyne_remember。开启后对话上下文自动持久化。",
+      f_autoPrefetch: "自动召回注入",
+      f_autoPrefetch_hint: "每个模型步骤前自动 recall 相关记忆并注入对话流，模型无需调用 mnemosyne_recall 即可看到先验上下文。每步增加一次 CLI 调用开销。",
+      f_prefetchTopK: "召回数量",
+      f_prefetchTopK_hint: "自动召回注入时返回的记忆条数。增多可看到更多先验，但引入更多噪声。",
+      f_prefetchMinQueryLen: "最小查询长度",
+      f_prefetchMinQueryLen_hint: "用户消息短于此长度时跳自动召回（避免对 'hi'/'ok' 等短消息浪费 CLI 调用）。",
       f_cli: "CLI 路径",
       f_cli_hint: "dsh-mnemosyne 专用。留空则自动查找 PATH 与 uv tools 安装目录（~/.local/share/uv/tools/mnemosyne-memory/bin）。一般无需填写。",
       f_defaultTopK: "默认召回数量",
@@ -129,6 +141,18 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       groupRecall_hint: "Default recall has a lexical gate — long queries (4+ tokens) need 30% surface match before vector scoring, which can cull semantically-matching rows. Polyphonic recall lets vector evidence admit rows on its own.",
       groupWM: "Working memory",
       groupWM_hint: "Working memory is the short-term hot tier. auto_sleep / sleep_threshold / ignore_patterns are config.yaml keys (read from dataDir/config.yaml); the rest are environment variables.",
+      groupAuto: "Automatic memory",
+      groupAuto_hint: "Automatic memory features are all disabled by default, preserving manual-only behavior. When enabled, the plugin automatically stores conversations and injects memory context without the model calling mnemosyne tools.",
+      f_promptSection: "Prompt section",
+      f_promptSection_hint: "Inject a '# Mnemosyne Memory' section into the system prompt telling the model that memory tools are available. Enable only when you want to remind the model that memory exists.",
+      f_autoSync: "Auto-sync conversation",
+      f_autoSync_hint: "Automatically store user/assistant messages to Mnemosyne episodic memory after each turn, without the model calling mnemosyne_remember. Conversation context persists automatically.",
+      f_autoPrefetch: "Auto-prefetch",
+      f_autoPrefetch_hint: "Recall relevant memories before each model step and inject them into the conversation, so the model sees prior context without calling mnemosyne_recall. Adds one CLI call per step.",
+      f_prefetchTopK: "Prefetch top-K",
+      f_prefetchTopK_hint: "Number of memories to recall for auto-prefetch injection. Higher shows more prior context but adds noise.",
+      f_prefetchMinQueryLen: "Min query length",
+      f_prefetchMinQueryLen_hint: "User messages shorter than this skip auto-prefetch (avoids wasting CLI calls on 'hi'/'ok').",
       f_cli: "CLI path",
       f_cli_hint: "dsh-mnemosyne only. Leave empty to auto-resolve from PATH and uv tools dir (~/.local/share/uv/tools/mnemosyne-memory/bin). Usually no need to set.",
       f_defaultTopK: "Default top-K",
@@ -200,6 +224,11 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     { group: "groupWM", key: "autoSleep", type: "toggle", label: "f_autoSleep", hint: "f_autoSleep_hint", yaml: "auto_sleep_enabled" },
     { group: "groupWM", key: "sleepThreshold", type: "number", label: "f_sleepThreshold", hint: "f_sleepThreshold_hint", yaml: "sleep_threshold" },
     { group: "groupWM", key: "ignorePatterns", type: "area", label: "f_ignorePatterns", hint: "f_ignorePatterns_hint", yaml: "ignore_patterns" },
+    { group: "groupAuto", key: "promptSection", type: "toggle", label: "f_promptSection", hint: "f_promptSection_hint" },
+    { group: "groupAuto", key: "autoSync", type: "toggle", label: "f_autoSync", hint: "f_autoSync_hint" },
+    { group: "groupAuto", key: "autoPrefetch", type: "toggle", label: "f_autoPrefetch", hint: "f_autoPrefetch_hint" },
+    { group: "groupAuto", key: "prefetchTopK", type: "number", label: "f_prefetchTopK", hint: "f_prefetchTopK_hint" },
+    { group: "groupAuto", key: "prefetchMinQueryLen", type: "number", label: "f_prefetchMinQueryLen", hint: "f_prefetchMinQueryLen_hint" },
   ];
   // Quick lookup: field key → yaml key
   const FIELD_TO_YAML = {};
@@ -228,6 +257,11 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     autoSleep: true,
     sleepThreshold: 20,
     ignorePatterns: "",
+    promptSection: false,
+    autoSync: false,
+    autoPrefetch: false,
+    prefetchTopK: 5,
+    prefetchMinQueryLen: 8,
   };
 
   // ── Styles: DSH design tokens (mirrors dsh-vision-router) ──────────────
@@ -296,8 +330,25 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
   }
 
   function MnemosynePanel(props) {
-    const { t, scope } = props;
+    const { t, scope, locale } = props;
     installStyles();
+
+    // Re-render when the user switches the app language in Settings → General.
+    // ctx.locale.bind(NS) (t) reads the active dictionary at call time, but
+    // without subscribing to the locale store the card never re-renders, so a
+    // language switch would leave the panel showing the old language. The
+    // locale face's subscribe/getSnapshot are prototype methods using `this`,
+    // so bind them before handing them to useSyncExternalStore (same pattern as
+    // dsh-vision-router).
+    const localeSubscribe = useMemo(
+      () => (locale && typeof locale.subscribe === "function" ? locale.subscribe.bind(locale) : () => () => {}),
+      [locale],
+    );
+    const localeGetSnapshot = useMemo(
+      () => (locale && typeof locale.getSnapshot === "function" ? locale.getSnapshot.bind(locale) : () => undefined),
+      [locale],
+    );
+    useSyncExternalStore(localeSubscribe, localeGetSnapshot);
 
     const subscribe = useMemo(() => (scope ? scope.subscribe.bind(scope) : () => () => {}), [scope]);
     const getSnapshot = useMemo(() => (scope ? scope.getSnapshot.bind(scope) : () => ({})), [scope]);
@@ -600,7 +651,8 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           id: "mnemosyne",
           order: 50,
           label: () => t("nav"),
-          inject: () => ({ t, scope }),
+          locale: NS,
+          inject: () => ({ t, scope, locale: ctx.locale }),
         },
         (props) => h("ul", { style: { listStyle: "none", margin: 0, padding: 0 } },
           h(MnemosynePanel, props),

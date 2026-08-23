@@ -83,6 +83,7 @@ describe("client module", () => {
     assert.equal(slot.opts.name, "settings.section");
     assert.equal(slot.opts.id, "mnemosyne");
     assert.equal(slot.opts.order, 50);
+    assert.equal(slot.opts.locale, "dsh-mnemosyne", "section opts declare the locale namespace");
     assert.equal(typeof slot.render, "function");
   });
 
@@ -90,7 +91,7 @@ describe("client module", () => {
     let slot = null;
     const ctx = {
       effect: (fn) => fn(),
-      locale: { register: () => {}, bind: (ns) => (k) => k },
+      locale: { register: () => {}, bind: (ns) => (k) => k, subscribe: () => () => {}, getSnapshot: () => ({ active: "en" }) },
       settingsScope: {
         bind: () => ({ getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
       },
@@ -104,7 +105,7 @@ describe("client module", () => {
       },
     };
     mod.apply(ctx);
-    const el = slot.render({ t: (k) => k, scope: ctx.settingsScope.bind() });
+    const el = slot.render({ t: (k) => k, scope: ctx.settingsScope.bind(), locale: ctx.locale });
     // render returns h("ul", ..., h(MnemosynePanel, props))
     assert.equal(el.type, "ul");
     assert.ok(el.children.length > 0);
@@ -112,5 +113,6 @@ describe("client module", () => {
     assert.equal(typeof panel.type, "function"); // MnemosynePanel
     assert.equal(typeof panel.props.t, "function");
     assert.ok(panel.props.scope);
+    assert.ok(panel.props.locale, "panel receives the locale face for re-render on language switch");
   });
 });

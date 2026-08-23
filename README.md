@@ -28,6 +28,10 @@ This plugin is ported from [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mn
 - **Config sync**: The panel reads actual values from the flat `config.yaml`; empty fields show default placeholders; saving triggers `mnemosyne config reload`
 - **Reset to defaults**: The panel footer resets all managed config keys to Mnemosyne upstream defaults
 - **Auto-consolidation**: On each `turn/end`, checks working memory count and runs `mnemosyne sleep` when the threshold is met
+- **Automatic memory (opt-in)**: Three optional features that automate memory operations — all disabled by default, preserving manual-only behavior:
+  - **Prompt section** — Injects a `# Mnemosyne Memory` header into the system prompt so the model knows memory is available
+  - **Auto-sync** — Automatically stores user/assistant messages to Mnemosyne after each turn, so conversation context persists without manual `mnemosyne_remember` calls
+  - **Auto-prefetch** — Recalls relevant memories before each model step and injects them into the conversation, so the model sees prior context without calling `mnemosyne_recall`
 
 ## Installation
 
@@ -64,6 +68,9 @@ Configuration comes from two sources: the plugin's own DSH settings (`~/.dsh/set
 | Recall | `polyphonicRecall` | config.yaml `polyphonic_recall` |
 | Working Memory | `wmMaxItems` / `wmTtlHours` | config.yaml `wm_*` |
 | Working Memory | `autoSleep` / `sleepThreshold` / `ignorePatterns` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` |
+| Automatic Memory | `promptSection` / `autoSync` / `autoPrefetch` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
+
+> **Note**: The Automatic Memory fields are DSH-side config (saved via the Settings panel, not written to `config.yaml`). Changing them requires a DSH restart to take effect, since they control plugin hook registration at startup.
 
 Saving writes to the corresponding config file and runs `mnemosyne config reload`. "Reset to Defaults" restores all panel-managed keys to Mnemosyne upstream defaults; additional config can be edited directly in `~/.dsh/mnemosyne/config.yaml`. Most settings hot-reload except `vec_type` and other startup-bound options.
 
@@ -72,7 +79,8 @@ Saving writes to the corresponding config file and runs `mnemosyne config reload
 ```
 ┌──────────────────────────────────────┐
 │           DSH Agent Session          │
-│  (tools + skill + session/event)     │
+│  (tools + skill + session/event +    │
+│   agent/pre-step + systemPrompt)     │
 └──────────────┬───────────────────────┘
                │ execFile (no shell)
 ┌──────────────▼───────────────────────┐
@@ -101,7 +109,7 @@ See [docs/design.md](docs/design.md).
 
 ```bash
 pnpm install
-pnpm test        # node --test (36 tests: unit + integration + client)
+pnpm test        # node --test (62 tests: unit + integration + client)
 ```
 
 ## License
