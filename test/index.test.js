@@ -23,6 +23,10 @@ import {
   writeMnemosyneConfigYaml,
   extractMessageText,
   extractLastUserText,
+  parseStats,
+  detectEmbeddingDeps,
+  startReindex,
+  getReindexStatus,
   formatPrefetchContext,
 } from "../src/index.js";
 
@@ -182,23 +186,24 @@ describe("buildEnv", () => {
     assert.equal(env.MNEMOSYNE_LLM_ENABLED, undefined);
   });
 
-  it("injects only explicitly-set fields and leaves user env untouched otherwise", () => {
+  it("injects only MNEMOSYNE_DATA_DIR and leaves other mnemosyne keys to config.yaml", () => {
+    // Embedding/LLM/recall/wm settings live in config.yaml (config.yaml > env),
+    // so buildEnv must NOT inject them as MNEMOSYNE_* env vars.
     const base = { MNEMOSYNE_EMBEDDING_MODEL: "user-kept-model", PATH: "/usr/bin" };
     const env = buildEnv(
-      { dataDir: "/tmp/d", embeddingModel: "BAAI/bge-small-zh-v1.5", embeddingDim: 512, llmEnabled: false, polyphonicRecall: true },
+      { dataDir: "/tmp/d", noEmbeddings: true, embeddingModel: "BAAI/bge-small-zh-v1.5", llmEnabled: false, polyphonicRecall: true },
       base
     );
     assert.equal(env.MNEMOSYNE_DATA_DIR, "/tmp/d");
-    assert.equal(env.MNEMOSYNE_EMBEDDING_MODEL, "BAAI/bge-small-zh-v1.5");
-    assert.equal(env.MNEMOSYNE_EMBEDDING_DIM, "512");
-    assert.equal(env.MNEMOSYNE_LLM_ENABLED, "false");
-    assert.equal(env.MNEMOSYNE_POLYPHONIC_RECALL, "1");
     assert.equal(env.MNEMOSYNE_NO_EMBEDDINGS, undefined);
+    assert.equal(env.MNEMOSYNE_EMBEDDING_MODEL, "user-kept-model"); // untouched, owned by config.yaml
+    assert.equal(env.MNEMOSYNE_LLM_ENABLED, undefined);
+    assert.equal(env.MNEMOSYNE_POLYPHONIC_RECALL, undefined);
     assert.equal(env.PATH, "/usr/bin");
   });
 
-  it("sets NO_EMBEDDINGS only when explicitly true", () => {
-    assert.equal(buildEnv({ noEmbeddings: true }, {}).MNEMOSYNE_NO_EMBEDDINGS, "1");
+  it("never sets NO_EMBEDDINGS (config.yaml owns it)", () => {
+    assert.equal(buildEnv({ noEmbeddings: true }, {}).MNEMOSYNE_NO_EMBEDDINGS, undefined);
     assert.equal(buildEnv({ noEmbeddings: false }, {}).MNEMOSYNE_NO_EMBEDDINGS, undefined);
   });
 
@@ -225,6 +230,23 @@ describe("buildEnv", () => {
   it("overwrites a tainted MNEMOSYNE_DATA_DIR inherited from base env", () => {
     const env = buildEnv({}, { MNEMOSYNE_DATA_DIR: "~/.dsh/mnemosyne" });
     assert.equal(env.MNEMOSYNE_DATA_DIR, DEFAULT_DATA_DIR);
+  });
+});
+
+describe("parseStats", () => {
+  it("extracts the counts mnemosyne stats actually prints", () => {
+    const out =
+      "Mnemosyne Stats\n\n" +
+      "  Total memories: 112\n" +
+      "  Working memory: 113\n" +
+      "  Episodic memory: 0\n" +
+      "  Knowledge triples: 7\n";
+    assert.deepEqual(parseStats(out), { total: 112, working: 113, episodic: 0, triples: 7 });
+  });
+
+  it("returns undefined for missing / empty / null input", () => {
+    assert.deepEqual(parseStats(""), { total: undefined, working: undefined, episodic: undefined, triples: undefined });
+    assert.deepEqual(parseStats(null), { total: undefined, working: undefined, episodic: undefined, triples: undefined });
   });
 });
 
@@ -285,6 +307,44 @@ describe("setupMnemosyne", { skip: !hasCli }, () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("detectEmbeddingDeps", { skip: !hasCli }, () => {
+  it("reports fastembed and sqlite-vec availability from the CLI venv", async () => {
+    const cli = resolveCli("mnemosyne");
+    const deps = await detectEmbeddingDeps(cli);
+    // Both are booleans; python path resolved from the shebang.
+    assert.equal(typeof deps.fastembed, "boolean");
+    assert.equal(typeof deps.sqliteVec, "boolean");
+    assert.ok(deps.python, "resolves the venv python from the CLI shebang");
+  });
+});
+
+describe("async reindex", { skip: !hasCli }, () => {
+  it("starts a background reindex and reports completion via status", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dsh-mnem-reindex-"));
+    try {
+      const start = startReindex(dir, "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2");
+      assert.equal(start.ok, true);
+      // Poll until done (fresh empty dir reindexes in well under a second).
+      let status = getReindexStatus(dir);
+      for (let i = 0; i < 40 && status.running; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        status = getReindexStatus(dir);
+      }
+      assert.equal(status.done, true);
+      assert.equal(status.error, null);
+      assert.match(status.output, /Reindex complete/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports not-started for an unknown dataDir", () => {
+    const s = getReindexStatus("/nonexistent/xyz");
+    assert.equal(s.started, false);
+    assert.equal(s.running, false);
   });
 });
 

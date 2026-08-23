@@ -157,9 +157,9 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ## 8. 测试策略
 
-测试分三层，均用 `node:test`（stdlib，零额外依赖），`pnpm test` 一并执行，共 24 例。
+测试分三层，均用 `node:test`（stdlib，零额外依赖），`pnpm test` 一并执行，共 65 例。
 
-### 8.1 单元测试 `test/index.test.js`（12 例，无需 mnemosyne CLI）
+### 8.1 单元测试 `test/index.test.js`（53 例，无需 mnemosyne CLI）
 
 1. `storeArgs` / `recallArgs` 位置参数组装（含可选参数缺省）；
 2. mock ctx 上 `apply()` 恰好注册 5 个预期工具，且每个都有 execute / output.schema / render；
@@ -222,18 +222,9 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ### 10.3 配置透传
 
-`buildEnv(config)` 负责插件调用 CLI 时的运行时环境，**仅注入显式设非默认的字段**，用户全局 env 里已设的 `MNEMOSYNE_*` 不被覆盖（`dataDir` 除外，它是插件核心契约）。mnemosyne 自身的完整配置由 `dataDir/config.yaml` 管理，文件优先级为 config.yaml > env vars > hardcoded defaults；面板直接读写 config.yaml 中的面板字段：
+`buildEnv(config)` 负责插件调用 CLI 时的运行时环境，**只注入 `MNEMOSYNE_DATA_DIR`**（始终钉住，它是插件核心契约）。mnemosyne 自身的完整配置由 `dataDir/config.yaml` 管理，文件优先级为 config.yaml > env vars > hardcoded defaults；面板直接读写 config.yaml 中的面板字段。Embedding / LLM / 召回调优 / 工作记忆等上游键**只存在于 config.yaml**，不在 `Config` schema 与 `buildEnv` 里声明，避免形成被 config.yaml 遮蔽的第二条通路；用户全局 env 里已设的 `MNEMOSYNE_*` 会被 config.yaml 未设的键保留。
 
-| Config 字段 | CLI 运行时环境 / config.yaml 键 |
-|---|---|
-| `dataDir` | `MNEMOSYNE_DATA_DIR` |
-| `noEmbeddings` | `MNEMOSYNE_NO_EMBEDDINGS` |
-| `embeddingModel`/`embeddingDim`/`embeddingApiUrl`/`embeddingApiKey` | `MNEMOSYNE_EMBEDDING_*` |
-| `llmEnabled`/`llmBaseUrl`/`llmApiKey`/`llmModel`/`llmTimeout` | `MNEMOSYNE_LLM_*` |
-| `polyphonicRecall` | `MNEMOSYNE_POLYPHONIC_RECALL` |
-| `wmMaxItems`/`wmTtlHours` | `MNEMOSYNE_WM_*` |
-
-面板字段对应 config.yaml 的扁平顶层键：`noEmbeddings`→`no_embeddings`、`embeddingModel`→`embedding_model`、`embeddingDim`→`embedding_dim`、`embeddingApiUrl`→`embedding_api_url`、`embeddingApiKey`→`embedding_api_key`、`llmEnabled`→`llm_enabled`、`llmBaseUrl`→`llm_base_url`、`llmApiKey`→`llm_api_key`、`llmModel`→`llm_model`、`llmTimeout`→`llm_timeout`、`polyphonicRecall`→`polyphonic_recall`、`wmMaxItems`→`wm_max_items`、`wmTtlHours`→`wm_ttl_hours`、`autoSleep`→`auto_sleep_enabled`、`sleepThreshold`→`sleep_threshold`、`ignorePatterns`→`ignore_patterns`。`cli`、`defaultTopK`、`timeoutMs`、`dataDir` 是 DSH 专用设置（运行时目录以 DSH settings 的 `dataDir` 为唯一事实源，config.yaml 不再写 `data_dir`）。
+面板字段对应 config.yaml 的扁平顶层键：`noEmbeddings`→`no_embeddings`、`embeddingModel`→`embedding_model`、`embeddingDim`→`embedding_dim`、`embeddingApiUrl`→`embedding_api_url`、`embeddingApiKey`→`embedding_api_key`、`llmEnabled`→`llm_enabled`、`llmBaseUrl`→`llm_base_url`、`llmApiKey`→`llm_api_key`、`llmModel`→`llm_model`、`llmTimeout`→`llm_timeout`、`polyphonicRecall`→`polyphonic_recall`、`wmMaxItems`→`wm_max_items`、`wmTtlHours`→`wm_ttl_hours`、`autoSleep`→`auto_sleep_enabled`、`sleepThreshold`→`sleep_threshold`、`ignorePatterns`→`ignore_patterns`。`cli`、`defaultTopK`、`timeoutMs`、`dataDir` 及自动记忆五键是 DSH 专用设置（运行时目录以 DSH settings 的 `dataDir` 为唯一事实源，config.yaml 不再写 `data_dir`）。
 
 `readMnemosyneConfigYaml()` 解析扁平 YAML 标量并恢复字符串、数字、布尔值和 null 类型；`ensureConfigDefaults()` 在 setup/diagnose 时只为缺失或空值补写 mnemosyne 默认值，不覆盖用户已有值。
 
@@ -286,7 +277,7 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 | `autoSync` | `false` | 每轮对话后自动将 user/assistant 消息存入 Mnemosyne 情景记忆 |
 | `autoPrefetch` | `false` | 每个模型步骤前自动 recall 相关记忆并注入对话流 |
 | `prefetchTopK` | `5` | 自动召回注入时返回的记忆条数 |
-| `prefetchMinQueryLen` | `8` | 用户消息短于此长度时跳过自动召回 |
+| `prefetchMinQueryLen` | `3` | 用户消息短于此长度时跳过自动召回 |
 
 ### 11.2 systemPrompt.section — 静态声明段
 
@@ -330,12 +321,12 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ### 11.7 测试
 
-新增 33 例测试（总计 57 例）：
+新增 33 例测试（总计 65 例）：
 - 自动记忆配置默认值（6 例）：验证三项功能默认关闭、systemPrompt.section 条件注册、agent/pre-step 条件注册
 - `extractMessageText`（5 例）：从 content blocks 数组提取文本
 - `extractLastUserText`（3 例）：从 messages 数组提取最后一条 user 消息
 - `formatPrefetchContext`（3 例）：格式化 recall 输出为 prompt 注入文本
-- 原有 24 例保持通过
+- 原有 24 例保持通过（累计 65 例）
 
 ## 12. 后续可选增强
 

@@ -70,7 +70,7 @@ Configuration comes from two sources: the plugin's own DSH settings (`~/.dsh/set
 | Working Memory | `autoSleep` / `sleepThreshold` / `ignorePatterns` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` |
 | Automatic Memory | `promptSection` / `autoSync` / `autoPrefetch` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
 
-> **Note**: The Automatic Memory fields are DSH-side config (saved via the Settings panel, not written to `config.yaml`). Changing them requires a DSH restart to take effect, since they control plugin hook registration at startup.
+> **Note**: The Automatic Memory fields are DSH-side config (saved via the Settings panel, not written to `config.yaml`). They take effect at runtime via the settings watcher — no DSH restart needed.
 
 Saving writes to the corresponding config file and runs `mnemosyne config reload`. "Reset to Defaults" restores all panel-managed keys to Mnemosyne upstream defaults; additional config can be edited directly in `~/.dsh/mnemosyne/config.yaml`. Most settings hot-reload except `vec_type` and other startup-bound options.
 
@@ -109,7 +109,7 @@ See [docs/design.md](docs/design.md).
 
 ```bash
 pnpm install
-pnpm test        # node --test (62 tests: unit + integration + client)
+pnpm test        # node --test (65 tests: unit + integration + client)
 ```
 
 ## License

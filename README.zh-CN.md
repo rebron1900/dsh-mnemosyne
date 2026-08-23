@@ -70,7 +70,7 @@ dsh plugin --profile web add ./dsh-mnemosyne
 | 工作记忆 | `autoSleep` / `sleepThreshold` / `ignorePatterns` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` |
 | 自动记忆 | `promptSection` / `autoSync` / `autoPrefetch` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
 
-> **注意**：自动记忆字段是 DSH 侧配置（通过设置面板保存，不写入 `config.yaml`）。修改后需重启 DSH 才能生效，因为它们在启动时控制插件钩子的注册。
+> **注意**：自动记忆字段是 DSH 侧配置（通过设置面板保存，不写入 `config.yaml`）。它们通过设置监听器在运行时生效，无需重启 DSH。
 
 面板保存会写入对应配置文件，并执行 `mnemosyne config reload`。底部"恢复默认配置"会将面板管理的配置恢复为 mnemosyne 默认值；更多未展示的配置可以直接编辑 `~/.dsh/mnemosyne/config.yaml`。除 `vec_type` 等启动时确定的配置外，大部分配置支持热加载。
 
@@ -109,7 +109,7 @@ dsh plugin --profile web add ./dsh-mnemosyne
 
 ```bash
 pnpm install
-pnpm test        # node --test（62 例：单元 + 集成 + client）
+pnpm test        # node --test（65 例：单元 + 集成 + client）
 ```
 
 ## License

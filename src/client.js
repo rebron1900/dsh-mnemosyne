@@ -44,7 +44,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       groupPlugin: "插件",
       groupPlugin_hint: "dsh-mnemosyne 插件自身行为。这些参数控制 CLI 调用方式与数据存放位置，仅作用于 dsh-mnemosyne，不影响 mnemosyne CLI 本体。",
       groupEmbedding: "Embedding",
-      groupEmbedding_hint: "语义检索的向量化模型。mnemosyne 默认用 bge-small-en-v1.5（384 维），需 fastembed 库。禁用后退回关键词检索（FTS5），仍可用但语义匹配能力下降。",
+      groupEmbedding_hint: "语义检索的向量化模型。mnemosyne 默认用 paraphrase-multilingual-MiniLM-L12-v2（384 维，多语言），需 fastembed 库。禁用后退回关键词检索（FTS5），仍可用但语义匹配能力下降。",
       groupLLM: "LLM 整合",
       groupLLM_hint: "sleep() 整合时用 LLM 提炼摘要。启用后优先用远程 API，失败回退本地 GGUF（MiniCPM5-1B，约 656MB），再失败用 AAAK 关键词编码。不启用则只用 AAAK。",
       groupRecall: "召回调优",
@@ -74,7 +74,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_noEmbeddings: "禁用 embedding",
       f_noEmbeddings_hint: "透传 MNEMOSYNE_NO_EMBEDDINGS=1。跳过 embedding 模型加载，仅用关键词检索（FTS5）。适合无 fastembed 或纯关键词场景。语义匹配能力会下降。",
       f_embeddingModel: "Embedding 模型",
-      f_embeddingModel_hint: "透传 MNEMOSYNE_EMBEDDING_MODEL。默认 bge-small-en-v1.5（384维）。中文可用 BAAI/bge-small-zh-v1.5；多语言可用 sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2。更换模型后需 reindex。",
+      f_embeddingModel_hint: "透传 MNEMOSYNE_EMBEDDING_MODEL。默认 paraphrase-multilingual-MiniLM-L12-v2（384维，多语言）。中文可用 BAAI/bge-small-zh-v1.5；纯英文可用 BAAI/bge-small-en-v1.5。更换模型后需 reindex。",
       f_embeddingDim: "维度",
       f_embeddingDim_hint: "透传 MNEMOSYNE_EMBEDDING_DIM。显式指定向量维度，优先级高于模型内置映射。未知模型必须填写，否则启动报错。更换维度需 reindex。",
       f_embeddingApiUrl: "Embedding API 地址",
@@ -104,6 +104,33 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_ignorePatterns: "忽略模式",
       f_ignorePatterns_hint: "config.yaml 键 ignore_patterns。正则表达式列表（Python re 语法），匹配的内容在 remember() 时被静默丢弃。每行一个模式，如 ^pip install、^Traceback、^sudo 。",
       reset: "重置",
+      statWorking: "工作记忆",
+      statEpisodic: "情景记忆",
+      statTriples: "知识三元组",
+      statConsolidations: "整合次数",
+      depsTitle: "组件安装情况",
+      depsCli: "mnemosyne CLI",
+      depsFastembed: "fastembed",
+      depsSqliteVec: "sqlite-vec",
+      depsInstalled: "已安装",
+      depsMissing: "未安装",
+      depsInstall: "安装",
+      depsInstalling: "安装中…",
+      depsInstallDone: "安装完成",
+      depsInstallFail: "安装失败",
+      depsModelTitle: "嵌入模型",
+      depsModelChoose: "选择模型",
+      depsModelCustom: "自定义模型名称",
+      depsModelPlaceholder: "输入模型名称，如 BAAI/bge-small-zh-v1.5",
+      depsModelConfirm: "确认",
+      depsModelCancel: "取消",
+      depsModelHint: "选择嵌入模型后需 reindex 重建向量索引。",
+      depsModelReindexTip: "切换嵌入模型后，旧记忆的向量与新模型语义空间不一致，必须点击「重建索引」重新生成向量，否则语义召回会错乱。",
+      depsReindex: "重建索引",
+      depsReindexing: "重建中…",
+      depsReindexDone: "索引重建完成",
+      depsReindexFail: "索引重建失败",
+      depsReindexRunning: "索引重建已在后台进行中",
     },
     en: {
       nav: "Mnemosyne",
@@ -134,7 +161,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       groupPlugin: "Plugin",
       groupPlugin_hint: "dsh-mnemosyne plugin behavior. These control CLI invocation and data location; they only affect the dsh plugin, not the mnemosyne CLI itself.",
       groupEmbedding: "Embedding",
-      groupEmbedding_hint: "Vector model for semantic retrieval. mnemosyne defaults to bge-small-en-v1.5 (384-dim), requires fastembed. Disabling falls back to keyword search (FTS5) — still works but loses semantic matching.",
+      groupEmbedding_hint: "Vector model for semantic retrieval. mnemosyne defaults to paraphrase-multilingual-MiniLM-L12-v2 (384-dim, multilingual), requires fastembed. Disabling falls back to keyword search (FTS5) — still works but loses semantic matching.",
       groupLLM: "LLM consolidation",
       groupLLM_hint: "sleep() uses an LLM to distill summaries. When enabled, tries remote API first, then local GGUF (MiniCPM5-1B, ~656MB), then AAAK keyword encoding. Without it, only AAAK is used.",
       groupRecall: "Recall tuning",
@@ -164,7 +191,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_noEmbeddings: "Disable embeddings",
       f_noEmbeddings_hint: "Sets MNEMOSYNE_NO_EMBEDDINGS=1. Skips embedding model, uses keyword-only retrieval (FTS5). Semantic matching is reduced but keyword search still works.",
       f_embeddingModel: "Embedding model",
-      f_embeddingModel_hint: "MNEMOSYNE_EMBEDDING_MODEL. Default bge-small-en-v1.5 (384-dim). Chinese: BAAI/bge-small-zh-v1.5; multilingual: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2. Changing model requires reindex.",
+      f_embeddingModel_hint: "MNEMOSYNE_EMBEDDING_MODEL. Default paraphrase-multilingual-MiniLM-L12-v2 (384-dim, multilingual). Chinese: BAAI/bge-small-zh-v1.5; English-only: BAAI/bge-small-en-v1.5. Changing model requires reindex.",
       f_embeddingDim: "Dimensions",
       f_embeddingDim_hint: "MNEMOSYNE_EMBEDDING_DIM. Explicit vector dimension, overrides model's built-in mapping. Required for unknown models (startup fails otherwise). Changing dimension requires reindex.",
       f_embeddingApiUrl: "Embedding API URL",
@@ -194,6 +221,33 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_ignorePatterns: "Ignore patterns",
       f_ignorePatterns_hint: "config.yaml key ignore_patterns. Regex patterns (Python re syntax); matching content is silently dropped at remember() time. One pattern per line, e.g. ^pip install, ^Traceback, ^sudo .",
       reset: "Reset",
+      statWorking: "Working memory",
+      statEpisodic: "Episodic memory",
+      statTriples: "Knowledge triples",
+      statConsolidations: "Consolidations",
+      depsTitle: "Component install status",
+      depsCli: "mnemosyne CLI",
+      depsFastembed: "fastembed",
+      depsSqliteVec: "sqlite-vec",
+      depsInstalled: "Installed",
+      depsMissing: "Missing",
+      depsInstall: "Install",
+      depsInstalling: "Installing…",
+      depsInstallDone: "Install complete",
+      depsInstallFail: "Install failed",
+      depsModelTitle: "Embedding model",
+      depsModelChoose: "Choose model",
+      depsModelCustom: "Custom model name",
+      depsModelPlaceholder: "Enter model name, e.g. BAAI/bge-small-zh-v1.5",
+      depsModelConfirm: "Confirm",
+      depsModelCancel: "Cancel",
+      depsModelHint: "After choosing a model, run reindex to rebuild vector indexes.",
+      depsModelReindexTip: "After switching the embedding model, old memory vectors no longer match the new model's semantic space. You must click \"Reindex\" to regenerate vectors, otherwise semantic recall will be wrong.",
+      depsReindex: "Reindex",
+      depsReindexing: "Reindexing…",
+      depsReindexDone: "Reindex complete",
+      depsReindexFail: "Reindex failed",
+      depsReindexRunning: "Reindex already running in the background",
     },
   };
 
@@ -242,7 +296,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     timeoutMs: 20000,
     dataDir: "~/.dsh/mnemosyne",
     noEmbeddings: false,
-    embeddingModel: "BAAI/bge-small-en-v1.5",
+    embeddingModel: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     embeddingDim: 384,
     embeddingApiUrl: "",
     embeddingApiKey: "",
@@ -262,6 +316,14 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     autoPrefetch: false,
     prefetchTopK: 5,
     prefetchMinQueryLen: 3,
+  };
+
+  // Known embedding model → output dimension. Used to auto-fill embedding_dim
+  // when the user switches models (e.g. the zh model is 512d, not 384d).
+  const MODEL_DIMS = {
+    "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-small-zh-v1.5": 512,
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2": 384,
   };
 
   // ── Styles: DSH design tokens (mirrors dsh-vision-router) ──────────────
@@ -311,11 +373,37 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-status{margin:12px 0 2px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-module-platform);display:flex;flex-direction:column;gap:5px}' +
     '.mn-status-row{font-size:13px;color:var(--dsw-alias-label-secondary);line-height:1.5}' +
     '.mn-status-error{color:var(--dsw-alias-label-error);font-size:12px;line-height:1.5}' +
+    '.mn-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-top:12px}' +
+    '.mn-stat-card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}' +
+    '.mn-stat-value{font-size:20px;font-weight:700;line-height:1.2;color:var(--dsw-alias-label-primary)}' +
+    '.mn-stat-label{font-size:11px;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary)}' +
+    '.mn-deps{display:flex;flex-direction:column;gap:8px;margin:12px 0 2px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-module-platform)}' +
+    '.mn-deps-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);margin:0}' +
+    '.mn-deps-row{display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.5}' +
+    '.mn-deps-name{color:var(--dsw-alias-label-primary);min-width:0;flex:0 0 auto}' +
+    '.mn-deps-status{font-size:12px;white-space:nowrap;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}' +
+    '.mn-deps-ok{color:var(--dsw-alias-label-success)}' +
+    '.mn-deps-bad{color:var(--dsw-alias-label-error)}' +
+    '.mn-deps-btn{flex:none;padding:2px 10px;font-size:12px}' +
+    '.mn-modal{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:#00000066}' +
+    '.mn-modal-box{background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:12px;padding:18px;width:min(420px,calc(100vw - 48px));display:flex;flex-direction:column;gap:10px;box-shadow:0 8px 30px #00000055}' +
+    '.mn-modal-title{font-size:15px;font-weight:600;color:var(--dsw-alias-label-primary)}' +
+    '.mn-modal-hint{font-size:12px;color:var(--dsw-alias-label-tertiary);line-height:1.5;margin:0}' +
+    '.mn-modal-opt{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dsw-alias-label-secondary);cursor:pointer}' +
+    '.mn-modal-opt input{accent-color:var(--dsw-alias-brand-primary);margin:0}' +
+    '.mn-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}' +
     '.mn-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0 4px}' +
     '.mn-msg{font-size:12px;color:var(--dsw-alias-label-secondary);padding:4px 0}' +
     '.mn-footer{list-style:none;text-align:center;padding:12px 16px 4px}' +
     '.mn-footer-actions{display:flex;justify-content:center;margin-bottom:10px}' +
     '.mn-footer-hint{font-size:12px;color:var(--dsw-alias-label-tertiary);line-height:1.6;margin:0}' +
+    // Settings-nav brain icon: DSH's settings shell only projects id/order/label
+    // from a settings.section registration and picks the nav glyph from a closed
+    // list of built-in ids (unknown ids fall back to a gear). We mark our own nav
+    // button via MutationObserver (see registerSettingsNavIcon) and swap the gear
+    // for a brain using a mask, mirroring dsh-better-sidebar's approach.
+    '[data-dsh-mnemosyne-settings-nav] > svg:first-child{display:none}' +
+    '[data-dsh-mnemosyne-settings-nav]::before{content:"";flex:none;width:16px;height:16px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%2724%27%20height%3D%2724%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M12%205a3%203%200%201%200-5.997.125%204%204%200%200%200-2.526%205.77%204%204%200%200%200%20.556%206.588A4%204%200%201%200%2012%2018Z%27%2F%3E%3Cpath%20d%3D%27M12%205a3%203%200%201%201%205.997.125%204%204%200%200%201%202.526%205.77%204%204%200%200%201-.556%206.588A4%204%200%201%201%2012%2018Z%27%2F%3E%3Cpath%20d%3D%27M12%205v13%27%2F%3E%3C%2Fsvg%3E") center/contain no-repeat}' +
     '@media(max-width:640px){.mn-field{flex-direction:column;gap:6px}.mn-field-left{flex:none;padding-top:0}}';
 
   let stylesInstalled = false;
@@ -362,6 +450,10 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const [busy, setBusy] = useState(null);
     const [msg, setMsg] = useState(null);
     const [yamlConfig, setYamlConfig] = useState({});
+    const [modelPickerOpen, setModelPickerOpen] = useState(false);
+    const [modelChoice, setModelChoice] = useState("");
+    const [modelCustom, setModelCustom] = useState("");
+    const [reindex, setReindex] = useState({ running: false, done: false, error: null });
 
     const refresh = useCallback(async () => {
       setBusy("diag"); setMsg(null);
@@ -388,6 +480,80 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       } catch (e) { setMsg(t("setupFail") + ": " + String(e?.message ?? e)); }
       finally { setBusy(null); }
     };
+
+    const installEmbedding = async () => {
+      setBusy("deps"); setMsg(null);
+      try {
+        const r = await fetch("/mnemosyne/install-embedding", { method: "POST" });
+        const data = await r.json();
+        setMsg(data.ok ? t("depsInstallDone") : t("depsInstallFail") + ": " + (data.error || ""));
+        if (data.ok) await refresh();
+      } catch (e) { setMsg(t("depsInstallFail") + ": " + String(e?.message ?? e)); }
+      finally { setBusy(null); }
+    };
+
+    const saveModel = async () => {
+      const model = modelChoice === "custom" ? modelCustom.trim() : modelChoice;
+      if (!model) return;
+      setBusy("model"); setMsg(null);
+      try {
+        // Auto-fill the embedding dimension for known models so switching
+        // models doesn't leave a stale dim (e.g. zh model is 512d, not 384d).
+        const payload = { embedding_model: model };
+        const dim = MODEL_DIMS[model];
+        if (dim) payload.embedding_dim = dim;
+        const r = await fetch("/mnemosyne/config", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.error || "HTTP " + r.status);
+        setModelPickerOpen(false);
+        setMsg(t("depsModelHint"));
+        await refresh();
+      } catch (e) { setMsg(t("depsInstallFail") + ": " + String(e?.message ?? e)); }
+      finally { setBusy(null); }
+    };
+
+    const startReindex = async () => {
+      setReindex({ running: true, done: false, error: null });
+      setMsg(null);
+      try {
+        const r = await fetch("/mnemosyne/reindex", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: yamlConfig.embedding_model || undefined }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.error || "HTTP " + r.status);
+        if (data.alreadyRunning) setMsg(t("depsReindexRunning"));
+      } catch (e) {
+        setReindex({ running: false, done: false, error: String(e?.message ?? e) });
+        setMsg(t("depsReindexFail") + ": " + String(e?.message ?? e));
+      }
+    };
+
+    // Poll reindex status while a job is running.
+    useEffect(() => {
+      if (!reindex.running) return;
+      const timer = setInterval(async () => {
+        try {
+          const r = await fetch("/mnemosyne/reindex-status");
+          const s = await r.json();
+          if (s.done) {
+            setReindex({ running: false, done: true, error: s.error || null });
+            setMsg(s.error ? t("depsReindexFail") + ": " + s.error : t("depsReindexDone"));
+            await refresh();
+          } else if (!s.running && s.started) {
+            setReindex({ running: false, done: true, error: null });
+            setMsg(t("depsReindexDone"));
+            await refresh();
+          }
+        } catch { /* transient poll failure — keep polling */ }
+      }, 2000);
+      return () => clearInterval(timer);
+    }, [reindex.running]);
 
     const test = async () => {
       setBusy("test"); setMsg(null);
@@ -506,10 +672,15 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       finally { setSaving(false); }
     };
 
-    const total = (() => {
-      const m = diag?.stats?.match(/Total memories:\s*(\d+)/);
-      return m ? Number(m[1]) : null;
-    })();
+    const metrics = diag?.metrics;
+    // Stats cards: only metrics the mnemosyne CLI actually reports. WORKING /
+    // EPISODIC / TRIPLES come from `stats`; CONSOLIDATIONS from the DB.
+    const statCards = metrics ? [
+      { key: "working", label: t("statWorking"), value: metrics.working },
+      { key: "episodic", label: t("statEpisodic"), value: metrics.episodic },
+      { key: "triples", label: t("statTriples"), value: metrics.triples },
+      { key: "consolidations", label: t("statConsolidations"), value: metrics.consolidations },
+    ] : [];
 
     const groups = useMemo(() => {
       const map = {};
@@ -600,15 +771,109 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
             diag?.path ? "  (" + diag.path + ")" : "",
           ),
           diag?.dataDir ? h("div", { className: "mn-status-row" }, t("dataDir") + ": " + diag.dataDir) : null,
-          total != null ? h("div", { className: "mn-status-row" }, t("memories") + ": " + total) : null,
           diag?.ok === false && diag?.error ? h("div", { className: "mn-status-error" }, diag.error) : null,
         ),
+        statCards.length > 0
+          ? h("div", { className: "mn-stats" },
+              statCards.map((c) =>
+                h("div", { className: "mn-stat-card", key: c.key },
+                  h("div", { className: "mn-stat-value" }, c.value ?? "—"),
+                  h("div", { className: "mn-stat-label" }, c.label),
+                )
+              ),
+            )
+          : null,
+        // Dependency checks: one row per dep, install button on the right
+        h("div", { className: "mn-deps" },
+          h("div", { className: "mn-deps-title" }, t("depsTitle")),
+          h("div", { className: "mn-deps-row" },
+            h("span", { className: "mn-deps-name" }, t("depsCli")),
+            h("span", { className: "mn-deps-status" + (diag?.cliReady ? " mn-deps-ok" : " mn-deps-bad") },
+              diag?.cliReady ? "✅ " + t("depsInstalled") : "⚠️ " + t("depsMissing")),
+            h("button", {
+              type: "button",
+              className: "mn-btn mn-deps-btn",
+              disabled: !!busy || diag?.cliReady,
+              onClick: setup,
+            }, busy === "setup" ? t("depsInstalling") : diag?.cliReady ? t("depsInstalled") : t("depsInstall")),
+          ),
+          h("div", { className: "mn-deps-row" },
+            h("span", { className: "mn-deps-name" }, t("depsFastembed")),
+            h("span", { className: "mn-deps-status" + (diag?.deps?.fastembed ? " mn-deps-ok" : " mn-deps-bad") },
+              diag?.deps?.fastembed ? "✅ " + t("depsInstalled") : "⚠️ " + t("depsMissing")),
+            h("button", {
+              type: "button",
+              className: "mn-btn mn-deps-btn",
+              disabled: !!busy || !diag?.cliReady || diag?.deps?.fastembed,
+              onClick: installEmbedding,
+            }, busy === "deps" ? t("depsInstalling") : diag?.deps?.fastembed ? t("depsInstalled") : t("depsInstall")),
+          ),
+          h("div", { className: "mn-deps-row" },
+            h("span", { className: "mn-deps-name" }, t("depsSqliteVec")),
+            h("span", { className: "mn-deps-status" + (diag?.deps?.sqliteVec ? " mn-deps-ok" : " mn-deps-bad") },
+              diag?.deps?.sqliteVec ? "✅ " + t("depsInstalled") : "⚠️ " + t("depsMissing")),
+            h("button", {
+              type: "button",
+              className: "mn-btn mn-deps-btn",
+              disabled: !!busy || !diag?.cliReady || diag?.deps?.sqliteVec,
+              onClick: installEmbedding,
+            }, busy === "deps" ? t("depsInstalling") : diag?.deps?.sqliteVec ? t("depsInstalled") : t("depsInstall")),
+          ),
+          h("div", { className: "mn-deps-row" },
+            h("span", { className: "mn-deps-name" }, t("depsModelTitle")),
+            h("span", { className: "mn-help", tabIndex: 0, "aria-label": t("depsModelReindexTip") },
+              "?",
+              h("span", { className: "mn-tooltip", role: "note" }, t("depsModelReindexTip")),
+            ),
+            h("span", { className: "mn-deps-status mn-deps-ok" }, yamlConfig.embedding_model || t("depsModelChoose")),
+            h("button", {
+              type: "button",
+              className: "mn-btn mn-deps-btn",
+              disabled: !!busy || !diag?.cliReady,
+              onClick: () => { setModelPickerOpen(true); setModelChoice(""); setModelCustom(""); },
+            }, t("depsModelChoose")),
+            h("button", {
+              type: "button",
+              className: "mn-btn mn-deps-btn",
+              disabled: !!busy || !diag?.cliReady || reindex.running,
+              onClick: startReindex,
+            }, reindex.running ? t("depsReindexing") : t("depsReindex")),
+          ),
+        ),
         h("div", { className: "mn-actions" },
-          h("button", { type: "button", className: "mn-btn", disabled: !!busy, onClick: setup }, busy === "setup" ? t("installing") : t("setup")),
           h("button", { type: "button", className: "mn-btn", disabled: !!busy || !diag?.cliReady, onClick: test }, busy === "test" ? t("testing") : t("test")),
           h("button", { type: "button", className: "mn-btn", disabled: !!busy, onClick: refresh }, t("refresh")),
         ),
         msg ? h("div", { className: "mn-msg", role: "status" }, msg) : null,
+        // Model picker modal
+        modelPickerOpen ? h("div", { className: "mn-modal", role: "dialog", "aria-modal": "true", "aria-label": t("depsModelTitle") },
+          h("div", { className: "mn-modal-box" },
+            h("div", { className: "mn-modal-title" }, t("depsModelTitle")),
+            h("div", { className: "mn-modal-hint" }, t("depsModelHint")),
+            h("label", { className: "mn-modal-opt" },
+              h("input", { type: "radio", name: "mn-model", checked: modelChoice === "BAAI/bge-small-en-v1.5", onChange: () => setModelChoice("BAAI/bge-small-en-v1.5") }),
+              "BAAI/bge-small-en-v1.5 (English, 384d)"),
+            h("label", { className: "mn-modal-opt" },
+              h("input", { type: "radio", name: "mn-model", checked: modelChoice === "BAAI/bge-small-zh-v1.5", onChange: () => setModelChoice("BAAI/bge-small-zh-v1.5") }),
+              "BAAI/bge-small-zh-v1.5 (Chinese, 512d)"),
+            h("label", { className: "mn-modal-opt" },
+              h("input", { type: "radio", name: "mn-model", checked: modelChoice === "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", onChange: () => setModelChoice("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2") }),
+              "paraphrase-multilingual-MiniLM-L12-v2 (Multilingual, 384d)"),
+            h("label", { className: "mn-modal-opt" },
+              h("input", { type: "radio", name: "mn-model", checked: modelChoice === "custom", onChange: () => setModelChoice("custom") }),
+              t("depsModelCustom")),
+            modelChoice === "custom" ? h("input", {
+              type: "text", className: "mn-input", value: modelCustom,
+              placeholder: t("depsModelPlaceholder"),
+              onChange: (e) => setModelCustom(e.target.value),
+            }) : null,
+            h("div", { className: "mn-modal-actions" },
+              h("button", { type: "button", className: "mn-btn", disabled: busy === "model", onClick: () => setModelPickerOpen(false) }, t("depsModelCancel")),
+              h("button", { type: "button", className: "mn-btn mn-btn-save", disabled: busy === "model" || (modelChoice === "custom" && !modelCustom.trim()), onClick: saveModel },
+                busy === "model" ? t("depsInstalling") : t("depsModelConfirm")),
+            ),
+          ),
+        ) : null,
       ]),
       // Save bar (between status and config cards, shown when dirty)
       isDirty ? h("li", { className: "mn-card mn-card-open", key: "savebar" },
@@ -639,10 +904,56 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     );
   }
 
+  const SETTINGS_NAV_MARKER = "data-dsh-mnemosyne-settings-nav";
+
+  /**
+   * Mark our row in the DSH settings navigation so the injected CSS can swap
+   * the shell's fallback gear for a brain icon. DSH's settings shell only
+   * projects id/order/label from a settings.section registration and picks the
+   * nav glyph from a closed list of built-in ids, so we locate our own button
+   * by its localized label after the dialog mounts (mirrors dsh-better-sidebar).
+   * @param label - locale-aware label resolver used by the section registration.
+   * @returns disposer that disconnects observation and removes owned markers.
+   */
+  function registerSettingsNavIcon(label) {
+    let disposed = false;
+    const sync = () => {
+      if (disposed) return;
+      const currentLabel = label().trim();
+      const buttons = document.querySelectorAll('[role="dialog"] nav button');
+      for (const button of buttons) {
+        if (currentLabel.length > 0 && button.textContent?.trim() === currentLabel) {
+          button.setAttribute(SETTINGS_NAV_MARKER, "");
+        } else {
+          button.removeAttribute(SETTINGS_NAV_MARKER);
+        }
+      }
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      document.querySelectorAll(`[${SETTINGS_NAV_MARKER}]`).forEach((el) => el.removeAttribute(SETTINGS_NAV_MARKER));
+    };
+  }
+
   function apply(ctx) {
     ctx.effect(() => ctx.locale.register(NS, LOCALE), "dsh-mnemosyne: dictionaries");
     const t = ctx.locale.bind(NS);
     const scope = ctx.settingsScope.bind({ namespace: "mnemosyne" });
+
+    // Inject styles up front (idempotent) so the settings-nav brain icon rule
+    // is present before the settings dialog opens — otherwise the icon only
+    // appears after the Mnemosyne section is first rendered.
+    installStyles();
+
+    // Swap the settings-nav gear for a brain icon (best-effort; no-op in
+    // headless/minimal hosts without a DOM).
+    if (typeof document !== "undefined") {
+      ctx.effect(() => registerSettingsNavIcon(() => t("nav")), "dsh-mnemosyne: settings navigation icon");
+    }
 
     ctx.slots.inject("settings.section", function* () {
       yield ctx.slots.register(

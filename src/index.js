@@ -116,28 +116,11 @@ function yamlScalar(value) {
 }
 
 export const Config = z.object({
-  // --- plugin behaviour ---
+  // --- plugin behaviour (DSH-side; everything below stays in DSH settings) ---
   cli: z.string().default("mnemosyne").description("Mnemosyne CLI executable (name on PATH or absolute path)."),
   defaultTopK: z.number().default(5).description("Recall cap when the model omits top_k."),
   timeoutMs: z.number().default(20_000).description("Per-call CLI timeout in milliseconds."),
   dataDir: z.string().default(DEFAULT_DATA_DIR).description("Where mnemosyne stores its SQLite DB and config.yaml."),
-
-  // --- embedding ---
-  noEmbeddings: z.boolean().default(false).description("Disable semantic embeddings (keyword/FTS5 only)."),
-  embeddingModel: z.string().description("Embedding model id, e.g. BAAI/bge-small-zh-v1.5. Changing requires reindex."),
-  embeddingDim: z.number().description("Explicit embedding output dimension; leave unset for built-in model mappings."),
-  embeddingApiUrl: z.string().description("Custom embedding API endpoint (falls back to OPENROUTER_BASE_URL)."),
-  embeddingApiKey: z.string().role("secret").description("Embedding API key (falls back to OPENROUTER_API_KEY / OPENAI_API_KEY)."),
-
-  // --- LLM consolidation ---
-  llmEnabled: z.boolean().default(true).description("Global gate for LLM-backed consolidation."),
-  llmBaseUrl: z.string().description("OpenAI-compatible API base URL for remote LLM consolidation."),
-  llmApiKey: z.string().role("secret").description("API key for the remote LLM endpoint."),
-  llmModel: z.string().description("Remote LLM model id."),
-  llmTimeout: z.number().default(60).description("HTTP timeout in seconds for remote LLM calls."),
-
-  // --- recall tuning ---
-  polyphonicRecall: z.boolean().default(false).description("Route recall through PolyphonicRecallEngine (better phrasing tolerance, cross-scope risk on shared banks)."),
 
   // --- automatic memory (opt-in; defaults preserve manual-only behavior) ---
   // When true, a "# Mnemosyne Memory" section is injected into the system prompt
@@ -153,38 +136,27 @@ export const Config = z.object({
   autoPrefetch: z.boolean().default(false).description("Automatically recall and inject relevant memories before each model step."),
   prefetchTopK: z.number().default(5).description("Number of memories to recall for auto-prefetch injection."),
   prefetchMinQueryLen: z.number().default(3).description("Minimum user-message length to trigger auto-prefetch (shorter messages are skipped)."),
-
-  // --- working memory / sleep ---
-  wmMaxItems: z.number().description("Max unconsolidated working-memory items before eviction."),
-  wmTtlHours: z.number().description("TTL in hours for unconsolidated working-memory entries."),
-  autoSleep: z.boolean().default(true).description("Auto-run sleep consolidation on session start/end (config.yaml)."),
-  sleepThreshold: z.number().default(20).description("Min working-memory entries before auto-sleep triggers (config.yaml)."),
-  ignorePatterns: z.array(z.string()).description("Regex patterns filtering content before storage (config.yaml)."),
 });
 
+// Embedding / LLM / recall-tuning / working-memory settings (noEmbeddings,
+// embeddingModel, embeddingDim, embeddingApiUrl, embeddingApiKey, llmEnabled,
+// llmBaseUrl, llmApiKey, llmModel, llmTimeout, polyphonicRecall, wmMaxItems,
+// wmTtlHours, autoSleep, sleepThreshold, ignorePatterns) are NOT declared here:
+// they live solely in ~/.dsh/mnemosyne/config.yaml, which the mnemosyne CLI
+// reads directly (config.yaml > env). The panel writes them there; declaring
+// them in Config too would create a shadowed second path.
+
 /**
- * Build the environment passed to the mnemosyne CLI. Only non-empty/non-default
- * fields are injected, so a user's own MNEMOSYNE_* env wins for anything we
- * leave undefined. dataDir is always set (it is the plugin's core contract).
+ * Build the environment passed to the mnemosyne CLI. Only MNEMOSYNE_DATA_DIR is
+ * injected (always — it is the plugin's core contract). All other mnemosyne
+ * settings are read by the CLI from dataDir/config.yaml, so a user's own
+ * MNEMOSYNE_* env wins for anything the config file leaves unset.
  */
 export function buildEnv(config, base = process.env) {
   const c = config ?? {};
   const env = { ...base };
   // data dir is always pinned to the plugin's contract (~/.dsh/mnemosyne)
   env.MNEMOSYNE_DATA_DIR = expandPath(c.dataDir);
-  if (c.noEmbeddings) env.MNEMOSYNE_NO_EMBEDDINGS = "1";
-  if (c.embeddingModel) env.MNEMOSYNE_EMBEDDING_MODEL = c.embeddingModel;
-  if (c.embeddingDim != null) env.MNEMOSYNE_EMBEDDING_DIM = String(c.embeddingDim);
-  if (c.embeddingApiUrl) env.MNEMOSYNE_EMBEDDING_API_URL = c.embeddingApiUrl;
-  if (c.embeddingApiKey) env.MNEMOSYNE_EMBEDDING_API_KEY = c.embeddingApiKey;
-  if (c.llmEnabled === false) env.MNEMOSYNE_LLM_ENABLED = "false";
-  if (c.llmBaseUrl) env.MNEMOSYNE_LLM_BASE_URL = c.llmBaseUrl;
-  if (c.llmApiKey) env.MNEMOSYNE_LLM_API_KEY = c.llmApiKey;
-  if (c.llmModel) env.MNEMOSYNE_LLM_MODEL = c.llmModel;
-  if (c.llmTimeout != null) env.MNEMOSYNE_LLM_TIMEOUT = String(c.llmTimeout);
-  if (c.polyphonicRecall) env.MNEMOSYNE_POLYPHONIC_RECALL = "1";
-  if (c.wmMaxItems != null) env.MNEMOSYNE_WM_MAX_ITEMS = String(c.wmMaxItems);
-  if (c.wmTtlHours != null) env.MNEMOSYNE_WM_TTL_HOURS = String(c.wmTtlHours);
   return env;
 }
 
@@ -249,7 +221,7 @@ export function resolveCli(cli = "mnemosyne") {
   const exts = process.platform === "win32" ? [".exe", ""] : [""];
   for (const dir of dirs) {
     for (const ext of exts) {
-      const p = `${dir}/${cli}${ext}`;
+      const p = join(dir, `${cli}${ext}`);
       try {
         accessSync(p, constants.X_OK);
         return p;
@@ -257,12 +229,6 @@ export function resolveCli(cli = "mnemosyne") {
     }
   }
   return null;
-}
-
-/** Build an env that points mnemosyne at an isolated data dir (no embeddings),
- *  so integration tests never touch the user's real memory database. */
-export function isolatedEnv(dataDir, base = process.env) {
-  return { ...base, MNEMOSYNE_DATA_DIR: dataDir, MNEMOSYNE_NO_EMBEDDINGS: "1", HOME: dataDir };
 }
 
 /** Resolve uv binary path (with ~/.local/bin appended), or null. */
@@ -288,7 +254,13 @@ export async function setupMnemosyne(config = {}) {
     };
   }
   try {
-    const stdout = await runExec(uv, ["tool", "install", "mnemosyne-memory"], 180_000);
+    // Install with the embedding deps (fastembed + sqlite-vec) so semantic
+    // retrieval works out of the box — no second install step needed.
+    const stdout = await runExec(
+      uv,
+      ["tool", "install", "mnemosyne-memory", "--with", "fastembed", "--with", "sqlite-vec"],
+      300_000
+    );
     const path = resolveCli(cliName);
     // Fill in mnemosyne upstream defaults in config.yaml right after install
     if (path) ensureConfigDefaults(dataDir);
@@ -307,6 +279,74 @@ function runExec(file, args, timeoutMs) {
   });
 }
 
+/**
+ * Install the embedding dependencies (fastembed + sqlite-vec) into the mnemosyne
+ * uv tool environment. `uv tool install mnemosyne-memory --with fastembed
+ * --with sqlite-vec` re-installs the tool with the extra deps. Returns a status
+ * object; the caller re-runs diagnose to refresh the detection.
+ */
+export async function installEmbeddingDeps(config = {}) {
+  const uv = resolveUv();
+  if (!uv) {
+    return {
+      ok: false,
+      error: "uv not found on PATH. Install uv first: https://docs.astral.sh/uv/getting-started/installation/",
+    };
+  }
+  try {
+    const stdout = await runExec(
+      uv,
+      ["tool", "install", "mnemosyne-memory", "--with", "fastembed", "--with", "sqlite-vec"],
+      300_000
+    );
+    return { ok: true, output: stdout };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e) };
+  }
+}
+
+// --- async reindex (runs in the background, status polled by the panel) ---
+// Reindex can take minutes on a large DB, so it must not block the HTTP
+// response. We spawn the CLI process detached and track its status in a module
+// map keyed by dataDir; the panel polls /mnemosyne/reindex-status.
+
+const reindexJobs = new Map(); // dataDir -> { running, startedAt, done, error, output }
+
+/** Start a background reindex for the given dataDir/model. Returns the job id. */
+export function startReindex(dataDir, model) {
+  const dir = expandPath(dataDir);
+  const existing = reindexJobs.get(dir);
+  if (existing && existing.running) return { ok: true, alreadyRunning: true, id: dir };
+  const job = { running: true, startedAt: Date.now(), done: false, error: null, output: "" };
+  reindexJobs.set(dir, job);
+  const cli = resolveCli("mnemosyne");
+  const args = ["reindex", "--yes"];
+  if (model) args.push("--model", model);
+  const env = { ...process.env, MNEMOSYNE_DATA_DIR: dir };
+  execFile(cli, args, { timeout: 0, windowsHide: true, env, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+    job.running = false;
+    job.done = true;
+    job.output = String(stdout || "").trim();
+    if (error) job.error = String(stderr?.trim() || error.message);
+  });
+  return { ok: true, alreadyRunning: false, id: dir };
+}
+
+/** Read the current reindex status for a dataDir. */
+export function getReindexStatus(dataDir) {
+  const dir = expandPath(dataDir);
+  const job = reindexJobs.get(dir);
+  if (!job) return { running: false, done: false, started: false };
+  return {
+    running: job.running,
+    done: job.done,
+    started: true,
+    error: job.error,
+    output: job.output,
+    startedAt: job.startedAt,
+  };
+}
+
 /** Diagnose: detect CLI, ensure data dir + config defaults, run stats. */
 export async function diagnoseMnemosyne(config) {
   const c = config ?? {};
@@ -322,9 +362,80 @@ export async function diagnoseMnemosyne(config) {
     ensureConfigDefaults(dataDir);
     const env = buildEnv(c);
     const stats = await runMnemosyne(cli, "stats", [], Math.max(1_000, Number(c.timeoutMs) || 20_000), env);
-    return { ok: true, cliReady: true, path: cli, dataDir, stats };
+    const metrics = parseStats(stats);
+    // Consolidations come from the consolidation_log table (not in `stats`
+    // output). Best-effort — a missing table/DB just yields 0.
+    metrics.consolidations = await countConsolidations(dataDir);
+    const deps = await detectEmbeddingDeps(cli);
+    return { ok: true, cliReady: true, path: cli, dataDir, stats, metrics, deps };
   } catch (e) {
     return { ok: false, cliReady: true, path: cli, dataDir, error: String(e?.message ?? e) };
+  }
+}
+
+/**
+ * Detect whether the mnemosyne CLI's own Python environment has the embedding
+ * dependencies (fastembed + sqlite-vec). The CLI shebang points at the uv tool
+ * venv's python, so we resolve that and probe imports. Returns per-dep status.
+ */
+export async function detectEmbeddingDeps(cli) {
+  const result = { fastembed: false, sqliteVec: false, python: null };
+  try {
+    const shebang = readFileSync(cli, "utf8").split("\n")[0] ?? "";
+    const m = shebang.match(/^#!\s*(\S+)/);
+    const python = m ? m[1] : null;
+    if (!python) return result;
+    result.python = python;
+    const script =
+      "import importlib.util\n" +
+      "print('fastembed', bool(importlib.util.find_spec('fastembed')))\n" +
+      "print('sqlite_vec', bool(importlib.util.find_spec('sqlite_vec')))\n";
+    const stdout = await runExec(python, ["-c", script], 10_000);
+    for (const line of stdout.split("\n")) {
+      const [name, val] = line.split(" ");
+      if (name === "fastembed") result.fastembed = val === "True";
+      else if (name === "sqlite_vec") result.sqliteVec = val === "True";
+    }
+  } catch {
+    // Non-fatal — deps stay false/unknown.
+  }
+  return result;
+}
+
+/**
+ * Parse `mnemosyne stats` text into structured counts. Only fields that the
+ * CLI actually prints are returned (working/episodic/total/triples) — no
+ * fabricated metrics.
+ */
+export function parseStats(stats) {
+  const str = String(stats ?? "");
+  const grab = (label) => {
+    const m = str.match(new RegExp(`${label}:\\s*(\\d+)`));
+    return m ? Number(m[1]) : undefined;
+  };
+  return {
+    total: grab("Total memories"),
+    working: grab("Working memory"),
+    episodic: grab("Episodic memory"),
+    triples: grab("Knowledge triples"),
+  };
+}
+
+/** Count rows in consolidation_log via python3 (mnemosyne ships python).
+ *  Best-effort: returns 0 on any failure so diagnose stays non-fatal. */
+export async function countConsolidations(dataDir) {
+  const dir = expandPath(dataDir);
+  const db = join(dir, "mnemosyne.db");
+  const script =
+    "import sqlite3,sys\n" +
+    "c=sqlite3.connect(sys.argv[1])\n" +
+    "print(c.execute('SELECT COUNT(*) FROM consolidation_log').fetchone()[0])\n";
+  try {
+    const stdout = await runExec("python3", ["-c", script, db], 10_000);
+    const n = Number(stdout.trim());
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -340,7 +451,7 @@ const TEXT_OUTPUT = {
 /** mnemosyne upstream defaults for panel-managed config.yaml keys. */
 const MNEMOSYNE_YAML_DEFAULTS = {
   no_embeddings: false,
-  embedding_model: "BAAI/bge-small-en-v1.5",
+  embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   embedding_dim: 384,
   embedding_api_url: "",
   embedding_api_key: "",
@@ -601,6 +712,56 @@ export function apply(ctx, config) {
     disposers.push(
       web.register({
         kind: "exact",
+        path: "/mnemosyne/install-embedding",
+        handler: async (req, res) => {
+          if (req.method !== "POST") return sendJson(res, 405, { error: "POST only" });
+          if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
+          try {
+            sendJson(res, 200, await installEmbeddingDeps(cfg()));
+          } catch (e) {
+            sendJson(res, 500, { error: String(e?.message ?? e) });
+          }
+        },
+      })
+    );
+
+    disposers.push(
+      web.register({
+        kind: "exact",
+        path: "/mnemosyne/reindex",
+        handler: async (req, res) => {
+          if (req.method !== "POST") return sendJson(res, 405, { error: "POST only" });
+          if (!sameOrigin(req)) return sendJson(res, 403, { error: "untrusted origin" });
+          try {
+            const body = await readJsonBody(req).catch(() => ({}));
+            const model = body?.model || undefined;
+            sendJson(res, 200, startReindex(cfg().dataDir, model));
+          } catch (e) {
+            sendJson(res, 500, { error: String(e?.message ?? e) });
+          }
+        },
+      })
+    );
+
+    disposers.push(
+      web.register({
+        kind: "exact",
+        path: "/mnemosyne/reindex-status",
+        handler: async (req, res) => {
+          if (req.method !== "GET") return sendJson(res, 405, { error: "GET only" });
+          if (!trustedRead(req)) return sendJson(res, 403, { error: "untrusted origin" });
+          try {
+            sendJson(res, 200, getReindexStatus(cfg().dataDir));
+          } catch (e) {
+            sendJson(res, 500, { error: String(e?.message ?? e) });
+          }
+        },
+      })
+    );
+
+    disposers.push(
+      web.register({
+        kind: "exact",
         path: "/mnemosyne/test",
         handler: async (req, res) => {
           if (req.method !== "POST") return sendJson(res, 405, { error: "POST only" });
@@ -692,9 +853,7 @@ export function apply(ctx, config) {
           if (event?.type === "user/message") {
             // Skip plugin-injected messages (e.g. our own prefetch) to avoid feedback loops
             const source = event.data?.source;
-            if (source && typeof source === "object" && source.kind === "plugin") {
-              // fall through to auto-sleep check below
-            } else {
+            if (!source || typeof source !== "object" || source.kind !== "plugin") {
               const text = extractMessageText(event.data?.content);
               if (text && text.length > 5) {
                 const truncated = text.slice(0, 500);
@@ -778,7 +937,7 @@ export function apply(ctx, config) {
               "Search Mnemosyne memory by semantic similarity. Use before starting work on a task to retrieve relevant prior context.",
             parameters: {
               query: { type: "string", required: true, description: "Natural-language query describing what you need." },
-              top_k: { type: "number", description: `Maximum results to return (default: ${cfg().defaultTopK ?? 5}).` },
+              top_k: { type: "number", description: `Maximum results to return (default: ${topKLimit()}).` },
             },
             output: TEXT_OUTPUT,
             async execute(args) {
