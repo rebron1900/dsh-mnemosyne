@@ -261,7 +261,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     autoSync: false,
     autoPrefetch: false,
     prefetchTopK: 5,
-    prefetchMinQueryLen: 8,
+    prefetchMinQueryLen: 3,
   };
 
   // ── Styles: DSH design tokens (mirrors dsh-vision-router) ──────────────

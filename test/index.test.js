@@ -466,6 +466,24 @@ describe("extractLastUserText", () => {
     assert.equal(extractLastUserText(messages), "second question");
   });
 
+  it("skips plugin-injected user messages and finds the real user input", () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "我是谁" }], source: { kind: "user" } },
+      { role: "user", content: [{ type: "text", text: "system reminder" }], source: { kind: "agent-instructions" } },
+      { role: "user", content: [{ type: "text", text: "skill catalog" }], source: { kind: "skill-catalog" } },
+      { role: "user", content: [{ type: "text", text: "runtime context" }], source: { kind: "plugin", plugin: "dsh-system-prompt" } },
+    ];
+    assert.equal(extractLastUserText(messages), "我是谁");
+  });
+
+  it("skips mnemosyne prefetch-injected messages", () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "hello world" }], source: { kind: "user" } },
+      { role: "user", content: [{ type: "text", text: "## Mnemosyne Context" }], source: { kind: "plugin", plugin: "mnemosyne" } },
+    ];
+    assert.equal(extractLastUserText(messages), "hello world");
+  });
+
   it("returns empty string when no user messages exist", () => {
     const messages = [{ role: "assistant", content: [{ type: "text", text: "reply" }] }];
     assert.equal(extractLastUserText(messages), "");
@@ -474,6 +492,13 @@ describe("extractLastUserText", () => {
   it("returns empty string for non-array input", () => {
     assert.equal(extractLastUserText(null), "");
     assert.equal(extractLastUserText("not array"), "");
+  });
+
+  it("falls back to any user message when all are injected", () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "only injected" }], source: { kind: "plugin" } },
+    ];
+    assert.equal(extractLastUserText(messages), "only injected");
   });
 });
 

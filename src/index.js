@@ -152,7 +152,7 @@ export const Config = z.object({
   // mnemosyne_recall.
   autoPrefetch: z.boolean().default(false).description("Automatically recall and inject relevant memories before each model step."),
   prefetchTopK: z.number().default(5).description("Number of memories to recall for auto-prefetch injection."),
-  prefetchMinQueryLen: z.number().default(8).description("Minimum user-message length to trigger auto-prefetch (shorter messages are skipped)."),
+  prefetchMinQueryLen: z.number().default(3).description("Minimum user-message length to trigger auto-prefetch (shorter messages are skipped)."),
 
   // --- working memory / sleep ---
   wmMaxItems: z.number().description("Max unconsolidated working-memory items before eviction."),
@@ -872,7 +872,7 @@ export function apply(ctx, config) {
 
         // Extract the latest user message text as the recall query
         const query = extractLastUserText(decision.messages);
-        const minLen = dynamicCfg.prefetchMinQueryLen ?? 8;
+        const minLen = dynamicCfg.prefetchMinQueryLen ?? 3;
         if (!query || query.length < minLen) return decision;
         // Skip if we already prefetched this exact query in this turn
         if (prefetchedQueries.has(query)) return decision;
@@ -923,14 +923,28 @@ export function extractMessageText(content) {
     .trim();
 }
 
-/** Extract the last user message text from a messages array for prefetch query. */
+/** Extract the last genuine user message text from a messages array for prefetch query.
+ *  Skips plugin-injected, agent-instructions, and skill-catalog messages so the
+ *  query reflects the user's actual input, not system-reminder context. */
 export function extractLastUserText(messages) {
   if (!Array.isArray(messages)) return "";
+  // First pass: find the last genuine user input (skip injected context)
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg && msg.role === "user") {
+      const source = msg.source;
+      if (source && typeof source === "object") {
+        const kind = source.kind;
+        // "user" is real user input; "plugin", "agent-instructions", "skill-catalog" are injected
+        if (kind === "plugin" || kind === "agent-instructions" || kind === "skill-catalog") continue;
+      }
       return extractMessageText(msg.content);
     }
+  }
+  // Fallback: if no genuine user message found, try any user message
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg && msg.role === "user") return extractMessageText(msg.content);
   }
   return "";
 }

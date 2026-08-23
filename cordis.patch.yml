@@ -14,4 +14,4 @@
         autoSync: false
         autoPrefetch: false
         prefetchTopK: 5
-        prefetchMinQueryLen: 8
+        prefetchMinQueryLen: 3
