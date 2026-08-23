@@ -146,6 +146,33 @@ export const Config = z.object({
 // reads directly (config.yaml > env). The panel writes them there; declaring
 // them in Config too would create a shadowed second path.
 
+/** Keys of the "mnemosyne" settings.yaml section read as the auto-memory ground truth. */
+export const SETTINGS_AUTO_KEYS = ["promptSection", "autoSync", "autoPrefetch", "prefetchTopK", "prefetchMinQueryLen"];
+
+/** Parse the "mnemosyne" top-level section of the DSH settings.yaml file into
+ *  plain scalars (booleans, numbers, strings). Only the listed keys are kept;
+ *  parsing stops at the next top-level key. Unknown keys permissively skip. */
+export function parseSettingsAutoSection(yamlText, keys = SETTINGS_AUTO_KEYS) {
+  const out = {};
+  let inSection = false;
+  for (const line of String(yamlText ?? "").split("\n")) {
+    const m = /^[ \t]*([^\s:][^:]*):\s*(.*)$/.exec(line);
+    const key = m && m[1];
+    if (!inSection) {
+      if (m && !/^[ \t]/.test(line) && key === "mnemosyne") inSection = true;
+      continue;
+    }
+    if (!m || !/^[ \t]/.test(line)) break;
+    if (!keys.includes(key)) continue;
+    const v = (m[2] || "").trim();
+    if (v === "true") out[key] = true;
+    else if (v === "false") out[key] = false;
+    else if (/^-?\d+$/.test(v)) out[key] = Number(v);
+    else out[key] = v.replace(/^["']|["']$/g, "");
+  }
+  return out;
+}
+
 /**
  * Build the environment passed to the mnemosyne CLI. Only MNEMOSYNE_DATA_DIR is
  * injected (always — it is the plugin's core contract). All other mnemosyne
@@ -582,7 +609,6 @@ export function apply(ctx, config) {
   const cfg = () => config ?? {};
   // Dynamic config: updated by settings watch, read by auto-memory features
   let dynamicCfg = { ...cfg() };
-  let settingsScope = null;
   const env = () => buildEnv(cfg());
   // Numeric guardrails at the trust boundary (model args + user config).
   const clampNum = (v, fallback, min, max) => {
@@ -606,70 +632,91 @@ export function apply(ctx, config) {
   const run = (command, args) =>
     runMnemosyne(resolveCliPath(), command, args, callTimeout(), env());
 
+  // --- auto-memory config resolution (self-healing) ---
+  // The loader config, the settings-service document, and settings.yaml can
+  // disagree (loader caches entry configs; the settings document loads
+  // asynchronously). The panel persists every toggle to settings.yaml, so that
+  // file is treated as the ground truth for the auto keys; everything else is
+  // a fallback layer under it. Re-synced on registration, settings watch,
+  // document-updated events, and each pre-step / turn-end.
+  const AUTO_KEYS = ["promptSection", "autoSync", "autoPrefetch", "prefetchTopK", "prefetchMinQueryLen"];
+  let settingsScope = null;
+  let systemPromptService = null;
+  let sectionDisposer = null;
+  const sectionText = (
+    "# Mnemosyne Memory\n" +
+    "Mnemosyne local memory is active. Use mnemosyne_remember to store durable facts, preferences, or insights. " +
+    "Use mnemosyne_recall to search memories by semantic similarity. Use mnemosyne_forget to delete outdated memories. " +
+    "Use mnemosyne_stats to check memory status. Use mnemosyne_sleep to consolidate working memories into long-term summaries."
+  );
+  const settingsFilePath = () => (cfg().settingsFile ? String(cfg().settingsFile) : join(homedir(), ".dsh", "settings.yaml"));
+  const readSettingsFileAutoCfg = () => {
+    if (process.env.MNEMOSYNE_SKIP_SETTINGS_FILE === "1") return {}; // unit-test hermeticity
+    try {
+      return parseSettingsAutoSection(readFileSync(settingsFilePath(), "utf8"), AUTO_KEYS);
+    } catch { return {}; }
+  };
+  const syncDynamicCfg = () => {
+    const resolved = settingsScope && typeof settingsScope.get === "function" ? settingsScope.get() : undefined;
+    const fileCfg = readSettingsFileAutoCfg();
+    dynamicCfg = { ...cfg(), ...(resolved || {}), ...fileCfg };
+  };
+
   // Register the "mnemosyne" settings namespace so the client panel's
   // settingsScope can read/write config. Hard-dep via ctx.inject (not soft
   // ctx.get) — same pattern as dsh-vision-router, ensures registration fires
   // once the settings service is available.
-  // The returned SettingsScope provides watch() to receive dynamic updates
-  // when the user toggles auto-memory features via the panel.
   ctx.inject(["settings"], (sctx) => {
     sctx.effect(
       () => {
         const scope = sctx.settings.register("mnemosyne", Config, { base: cfg() });
         settingsScope = scope;
-        // Read the resolved value (merges schema defaults + base + user document)
-        if (scope && typeof scope.get === "function") {
-          const resolved = scope.get();
-          if (resolved) dynamicCfg = { ...cfg(), ...resolved };
-        }
+        syncDynamicCfg();
         // Watch for panel changes and update dynamicCfg in real-time
-        if (scope && typeof scope.watch === "function") {
-          return scope.watch((next) => {
-            dynamicCfg = { ...cfg(), ...next };
-          });
-        }
+        const offWatch = scope && typeof scope.watch === "function"
+          ? scope.watch(() => syncDynamicCfg())
+          : undefined;
+        // The service also emits document-updated on every raw-section change —
+        // a second net for the async first publish / fiber reloads.
+        const offDoc = ctx.on("settings/document-updated", (ns) => {
+          if (ns === "mnemosyne") syncDynamicCfg();
+        });
+        return () => {
+          offWatch?.();
+          offDoc?.();
+        };
       },
       "mnemosyne: settings namespace"
     );
   });
 
   // --- system prompt section (opt-in) ---
-  // When promptSection is enabled, inject a static "# Mnemosyne Memory" section
+  // When promptSection is enabled, inject a "# Mnemosyne Memory" section
   // into the system prompt so the model knows memory tools are available.
-  // Re-evaluated on settings change via dynamicCfg.
-  const systemPrompt = ctx.get("systemPrompt");
-  if (systemPrompt) {
-    const sectionText = (
-      "# Mnemosyne Memory\n" +
-      "Mnemosyne local memory is active. Use mnemosyne_remember to store durable facts, preferences, or insights. " +
-      "Use mnemosyne_recall to search memories by semantic similarity. Use mnemosyne_forget to delete outdated memories. " +
-      "Use mnemosyne_stats to check memory status. Use mnemosyne_sleep to consolidate working memories into long-term summaries."
-    );
-    let sectionDisposer = null;
-    const updateSection = () => {
-      const want = dynamicCfg.promptSection === true;
-      if (want && !sectionDisposer) {
-        sectionDisposer = systemPrompt.section({
+  // Bound via ctx.inject so it also registers when the systemPrompt service
+  // appears after this plugin's apply (it must not depend on apply-time order).
+  // text is a function (same seam as dsh-chinese-mode / dsh-web-app): it is
+  // evaluated per assembly and returns "" when disabled — the renderer drops
+  // empty sections, so no re-registration is ever needed.
+  ctx.inject(["systemPrompt"], (sctx) => {
+    sctx.effect(() => {
+      systemPromptService = sctx.systemPrompt;
+      try {
+        sectionDisposer = systemPromptService.section({
           name: "mnemosyne-memory",
           order: 95,
-          text: sectionText,
+          text: () => (dynamicCfg.promptSection === true ? sectionText : ""),
         });
-      } else if (!want && sectionDisposer) {
-        sectionDisposer();
-        sectionDisposer = null;
-      }
-    };
-    // Initial registration
-    updateSection();
-    // Re-evaluate when settings change
-    ctx.inject(["settings"], (sctx) => {
-      sctx.effect(() => {
-        if (settingsScope && typeof settingsScope.watch === "function") {
-          return settingsScope.watch(() => updateSection());
+      } catch { /* non-fatal: section stays off */ }
+      return () => {
+        systemPromptService = null;
+        if (sectionDisposer) {
+          sectionDisposer();
+          sectionDisposer = null;
         }
-      }, "mnemosyne: system prompt section watcher");
-    });
-  }
+      };
+    }, "mnemosyne: system prompt section");
+  });
 
   // HTTP routes for the client panel (Client→Host via fetch). Soft-dep on
   // webServer: headless/minimal hosts without a server simply skip these.
@@ -847,6 +894,7 @@ export function apply(ctx, config) {
   let autoSleepInFlight = false;
   ctx.effect(() =>
     ctx.on("session/event", async (_session, event) => {
+      if (event?.type === "turn/end") syncDynamicCfg();
       // --- auto-sync: store conversation to episodic memory ---
       if (dynamicCfg.autoSync) {
         try {
@@ -1018,6 +1066,7 @@ export function apply(ctx, config) {
     ctx.effect(() =>
       ctx.on("agent/pre-step", async ({ agent, messages, turn, step, signal }, next) => {
         // Check dynamic config at runtime — panel toggle takes effect immediately
+        syncDynamicCfg();
         if (!dynamicCfg.autoPrefetch) return next();
 
         // Reset dedup set on turn change
@@ -1111,11 +1160,11 @@ export function extractLastUserText(messages) {
 /** Format a recall result string into a memory-context block for prompt injection. */
 export function formatPrefetchContext(recallOutput) {
   if (!recallOutput || typeof recallOutput !== "string") return "";
-  const lines = recallOutput.split("\n").filter((l) => l.trim());
-  // Expect lines like "ID: <hex>", "Content: ...", "Score: 0.xx"
   const memories = [];
   let current = null;
-  for (const line of lines) {
+  for (const raw of recallOutput.split("\n")) {
+    const line = raw.trim(); // CLI indents every field line with two spaces
+    if (!line) continue;
     if (line.startsWith("ID:")) {
       if (current) memories.push(current);
       current = { id: line.slice(3).trim(), content: "", score: "" };
@@ -1123,6 +1172,8 @@ export function formatPrefetchContext(recallOutput) {
       if (current) current.content = line.slice(8).trim();
     } else if (line.startsWith("Score:")) {
       if (current) current.score = line.slice(6).trim();
+    } else if (current && current.content && !/^\[.*\]$/.test(line)) {
+      current.content += " " + line; // content spans multiple lines
     }
   }
   if (current) memories.push(current);

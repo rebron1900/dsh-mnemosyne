@@ -28,7 +28,11 @@ import {
   startReindex,
   getReindexStatus,
   formatPrefetchContext,
+  parseSettingsAutoSection,
 } from "../src/index.js";
+
+// Unit tests must not read the developer's real ~/.dsh/settings.yaml
+process.env.MNEMOSYNE_SKIP_SETTINGS_FILE = "1";
 
 /** Minimal cordis-style ctx: runs inject callbacks immediately, collects registrations. */
 function createMockCtx() {
@@ -41,9 +45,6 @@ function createMockCtx() {
   const ctx = {
     get: (key) => {
       if (key === "skills") return { register: (s) => skills.push(s) };
-      if (key === "systemPrompt") return {
-        section: (s) => { systemPromptSections.push(s); return () => {}; },
-      };
       return undefined;
     },
     effect: (fn) => effects.push(fn()),
@@ -72,6 +73,13 @@ function createMockCtx() {
       } else if (deps[0] === "settings") {
         fn({
           settings: { register: () => ({ get: () => ({}), watch: () => () => {} }) },
+          effect: (fn) => { effects.push(fn()); return () => {}; },
+        });
+      } else if (deps[0] === "systemPrompt") {
+        fn({
+          systemPrompt: {
+            section: (s) => { systemPromptSections.push(s); return () => {}; },
+          },
           effect: (fn) => { effects.push(fn()); return () => {}; },
         });
       } else if (deps[0] === "agents") {
@@ -452,19 +460,23 @@ describe("automatic memory config defaults", () => {
     assert.equal(env.MNEMOSYNE_DATA_DIR, DEFAULT_DATA_DIR);
   });
 
-  it("does not register systemPrompt section when promptSection is false", () => {
+  it("registers the systemPrompt section once with dynamic text (empty when promptSection is false)", () => {
     const { ctx, systemPromptSections } = createMockCtx();
     apply(ctx, { promptSection: false });
-    assert.equal(systemPromptSections.length, 0);
+    assert.equal(systemPromptSections.length, 1);
+    assert.equal(systemPromptSections[0].name, "mnemosyne-memory");
+    assert.equal(systemPromptSections[0].order, 95);
+    assert.equal(typeof systemPromptSections[0].text, "function");
+    assert.equal(systemPromptSections[0].text(), "");
   });
 
-  it("registers systemPrompt section when promptSection is true", () => {
+  it("registers the systemPrompt section with dynamic text (non-empty when promptSection is true)", () => {
     const { ctx, systemPromptSections } = createMockCtx();
     apply(ctx, { promptSection: true });
     assert.equal(systemPromptSections.length, 1);
     assert.equal(systemPromptSections[0].name, "mnemosyne-memory");
     assert.equal(systemPromptSections[0].order, 95);
-    assert.ok(systemPromptSections[0].text.includes("Mnemosyne Memory"));
+    assert.ok(systemPromptSections[0].text().includes("Mnemosyne Memory"));
   });
 
   it("registers agent/pre-step listener when autoPrefetch is true", () => {
@@ -579,6 +591,26 @@ describe("formatPrefetchContext", () => {
     assert.ok(result.includes("Project uses ESM modules"));
   });
 
+  it("parses the real CLI's indented output with multi-line content", () => {
+    const recall =
+      "Results for: mnemosyne memory\n" +
+      "  ID: d7f790497b0dd296\n" +
+      "  Content: A worktree for branch\n" +
+      "  `feature/session-memory-scope`\n" +
+      "  Score: 0.698\n" +
+      "  [entity match]\n" +
+      "\n" +
+      "  ID: 73b73d0fb68cb6e2\n" +
+      "  Content: synced mnemosyne memory\n" +
+      "  Score: 0.593";
+    const result = formatPrefetchContext(recall);
+    assert.ok(result.includes("## Mnemosyne Context"));
+    assert.ok(result.includes("A worktree for branch `feature/session-memory-scope`"));
+    assert.ok(result.includes("score: 0.698"));
+    assert.ok(result.includes("synced mnemosyne memory"));
+    assert.ok(!result.includes("[entity match]"));
+  });
+
   it("returns empty string when recall has no hits", () => {
     const recall = "Results for: empty query";
     assert.equal(formatPrefetchContext(recall), "");
@@ -664,6 +696,54 @@ describe("auto-sync session/event handler", () => {
     };
     // Should complete without error — autoSync is false so no store call attempted
     await assert.doesNotReject(async () => handler(null, userEvent));
+  });
+});
+
+describe("parseSettingsAutoSection", () => {
+  it("extracts the mnemosyne section scalars from a settings.yaml body", () => {
+    const out = parseSettingsAutoSection([
+      "locale:",
+      "  preference: zh",
+      "mnemosyne:",
+      "  promptSection: true",
+      "  autoSync: true",
+      "  autoPrefetch: true",
+      "  prefetchMinQueryLen: 6",
+      "search-pool:",
+      "  strategy: failover",
+    ].join("\n"));
+    assert.deepEqual(out, {
+      promptSection: true,
+      autoSync: true,
+      autoPrefetch: true,
+      prefetchMinQueryLen: 6,
+    });
+  });
+
+  it("leaves unrelated sections and keys alone", () => {
+    const out = parseSettingsAutoSection([
+      "mnemosyne:",
+      "  cli: mnemosyne",
+      "  defaultTopK: 5",
+      "  dataDir: ~/.dsh/mnemosyne",
+      "  other: value",
+    ].join("\n"));
+    assert.deepEqual(out, {});
+  });
+
+  it("returns an empty object when the section is absent", () => {
+    assert.deepEqual(parseSettingsAutoSection("locale:\n  preference: zh\n"), {});
+    assert.deepEqual(parseSettingsAutoSection(""), {});
+  });
+
+  it("stops at the next top-level key", () => {
+    const out = parseSettingsAutoSection([
+      "mnemosyne:",
+      "  autoSync: true",
+      "llm-pi-ai:",
+      "  autoSync: false",
+    ].join("\n"));
+    assert.deepEqual(out, { autoSync: true });
   });
 });
 

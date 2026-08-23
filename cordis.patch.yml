@@ -9,9 +9,6 @@
         defaultTopK: 5
         timeoutMs: 20000
         dataDir: ~/.dsh/mnemosyne
-        # Automatic memory features (all default false — manual-only by default)
-        promptSection: false
-        autoSync: false
-        autoPrefetch: false
-        prefetchTopK: 5
-        prefetchMinQueryLen: 3
+        # Automatic memory features live in the DSH settings "mnemosyne"
+        # namespace (panel toggles) — do NOT pin them here; a pinned value
+        # would fight the settings document and the panel.
