@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { apply, recallArgs, resolveCli, runMnemosyne, storeArgs } from "../src/index.js";
+import { apply, migrateDefaultSessionToGlobal, migrateSessionScopesToDefault, recallArgs, resolveCli, resolvePythonInterp, runMnemosyne, storeArgs, writeMnemosyneConfigYaml } from "../src/index.js";
 
 const CLI = resolveCli("mnemosyne");
 const TIMEOUT = 30_000;
@@ -24,10 +24,11 @@ let dataDir;
 let savedEnv;
 function createMockCtx() {
   const tools = [];
+  const sessionEvents = [];
   const ctx = {
     get: () => undefined, // no skills service in the minimal host
     effect: (fn) => fn(),
-    on: () => () => {},
+    on: (name, fn) => { if (name === "session/event") sessionEvents.push(fn); return () => {}; },
     inject: (deps, fn) => {
       if (deps[0] === "tools") {
         fn({ effect: (fn) => fn(), tools: { register: (def) => (tools.push(def), () => {}) } });
@@ -35,10 +36,12 @@ function createMockCtx() {
         fn({ webServer: { register: () => () => {} }, effect: (fn) => fn() });
       } else if (deps[0] === "settings") {
         fn({ settings: { register: () => ({ get: () => ({}), watch: () => () => {} }) }, effect: (fn) => fn() });
+      } else if (deps[0] === "agents") {
+        fn({ effect: (fn) => fn() });
       }
     },
   };
-  return { ctx, tools };
+  return { ctx, tools, sessionEvents };
 }
 
 suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
@@ -47,9 +50,13 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
     savedEnv = {
       MNEMOSYNE_DATA_DIR: process.env.MNEMOSYNE_DATA_DIR,
       MNEMOSYNE_NO_EMBEDDINGS: process.env.MNEMOSYNE_NO_EMBEDDINGS,
+      MNEMOSYNE_BANK: process.env.MNEMOSYNE_BANK,
+      MNEMOSYNE_SKIP_SETTINGS_FILE: process.env.MNEMOSYNE_SKIP_SETTINGS_FILE,
     };
     process.env.MNEMOSYNE_DATA_DIR = dataDir;
     process.env.MNEMOSYNE_NO_EMBEDDINGS = "1";
+    delete process.env.MNEMOSYNE_BANK;
+    process.env.MNEMOSYNE_SKIP_SETTINGS_FILE = "1";
   });
 
   after(() => {
@@ -57,6 +64,10 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
     else process.env.MNEMOSYNE_DATA_DIR = savedEnv.MNEMOSYNE_DATA_DIR;
     if (savedEnv.MNEMOSYNE_NO_EMBEDDINGS === undefined) delete process.env.MNEMOSYNE_NO_EMBEDDINGS;
     else process.env.MNEMOSYNE_NO_EMBEDDINGS = savedEnv.MNEMOSYNE_NO_EMBEDDINGS;
+    if (savedEnv.MNEMOSYNE_BANK === undefined) delete process.env.MNEMOSYNE_BANK;
+    else process.env.MNEMOSYNE_BANK = savedEnv.MNEMOSYNE_BANK;
+    if (savedEnv.MNEMOSYNE_SKIP_SETTINGS_FILE === undefined) delete process.env.MNEMOSYNE_SKIP_SETTINGS_FILE;
+    else process.env.MNEMOSYNE_SKIP_SETTINGS_FILE = savedEnv.MNEMOSYNE_SKIP_SETTINGS_FILE;
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -160,7 +171,7 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
 
     const marker = "it-scope-006 private fact for session A only";
     const stored = await byName.mnemosyne_remember.execute({ content: marker, source: "dsh-it", importance: 0.8 }, execA);
-    const id = stored.trim();
+    const id = stored.split("Stored:")[1].trim();
     assert.match(id, /^[0-9a-f]{16}$/);
 
     // Same session recalls its own row; another session cannot see it.
@@ -173,5 +184,124 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
     await assert.rejects(byName.mnemosyne_forget.execute({ id }, execB), /Memory not found/);
     const deleted = await byName.mnemosyne_forget.execute({ id }, execA);
     assert.equal(deleted, `Deleted: ${id}`);
+  });
+
+  it("migrateSessionScopesToDefault restores dsh rows to legacy shared recall", async () => {
+    const { ctx, tools } = createMockCtx();
+    apply(ctx, { cli: CLI, dataDir, sessionScope: true });
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    const exec = { agent: { session: { id: "session-4", header: { createdAt: 1700000000000 } } } };
+    const marker = "scope-reverse-migration-7fd2";
+    await byName.mnemosyne_remember.execute({ content: marker, source: "dsh-it" }, exec);
+    const before = await run("recall", [marker, "5"]);
+    assert.doesNotMatch(before, /ID:/);
+    const result = await migrateSessionScopesToDefault(resolvePythonInterp(CLI), dataDir);
+    assert.equal(result.ok, true);
+    assert.ok(result.migrated >= 1);
+    const after = await run("recall", [marker, "5"]);
+    assert.match(after, new RegExp(marker));
+  });
+
+  it("migrateDefaultSessionToGlobal makes legacy default rows visible to session recall", async () => {
+    const { ctx, tools } = createMockCtx();
+    apply(ctx, { cli: CLI, dataDir, sessionScope: true });
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    // Seed legacy rows into the "default" session via the plain CLI path
+    const marker = "legacy-default-marker-8f3c";
+    await run("store", [marker + " shared fact", "dsh-it", "0.7"]);
+    await run("store", [marker + " another shared fact", "dsh-it", "0.7"]);
+    // Before migration the rows are invisible to a session-scoped recall
+    const execA = {
+      agent: { session: { id: "session-11111111-2222-3333-4444-555555555555", header: {} } },
+    };
+    const before = await byName.mnemosyne_recall.execute({ query: marker, top_k: 5 }, execA);
+    assert.doesNotMatch(before, /ID:/, "legacy rows must be invisible before migration");
+
+    const res = await migrateDefaultSessionToGlobal(resolvePythonInterp(CLI), dataDir);
+    assert.ok(res.ok);
+    assert.ok(res.working >= 2, `expected >=2 working rows migrated, got ${res.working}`);
+
+    const after = await byName.mnemosyne_recall.execute({ query: marker, top_k: 5 }, execA);
+    assert.match(after, /ID:/, "migrated rows must be recallable from a session scope");
+  });
+
+  it("ignore_patterns in panel config.yaml filters stores via the env bridge", async () => {
+    writeMnemosyneConfigYaml(dataDir, { ignore_patterns: "^git status" });
+    try {
+      const { ctx, tools } = createMockCtx();
+      apply(ctx, { cli: CLI, dataDir });
+      const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+      // Matching noise is silently dropped by the write filter (remember → None)
+      const filtered = await byName.mnemosyne_remember.execute({
+        content: "git status\nOn branch main",
+        source: "dsh-it",
+        importance: 0.5,
+      });
+      assert.match(filtered, /Stored: None/);
+      // Non-matching content still stores normally
+      const stored = await byName.mnemosyne_remember.execute({
+        content: "it-filter-004 prefers pnpm",
+        source: "dsh-it",
+        importance: 0.7,
+      });
+      assert.match(stored, /^Stored: [0-9a-f]{16}/);
+      const id = stored.split("Stored:")[1].trim();
+      await byName.mnemosyne_forget.execute({ id });
+    } finally {
+      writeMnemosyneConfigYaml(dataDir, { ignore_patterns: "" });
+    }
+  });
+
+  it("auto-sync writes one real user message at turn end and honors ignore_patterns", async () => {
+    writeMnemosyneConfigYaml(dataDir, { ignore_patterns: "^git status", sync_roles: "user" });
+    try {
+      const { ctx, sessionEvents } = createMockCtx();
+      apply(ctx, { cli: CLI, dataDir, autoSync: true });
+      const handler = sessionEvents[0];
+      const session = { id: "session-auto-sync", header: { createdAt: 1 } };
+      const marker = "noise-token-9c1e";
+      await handler(session, {
+        type: "user/message",
+        data: { id: "test-id", role: "user", content: [{ type: "text", text: "git status\nOn branch main " + marker }], source: { kind: "user" } },
+      });
+      await handler(session, { type: "turn/end", data: { turn: 1 } });
+      const out = await run("recall", [marker, "5"]);
+      assert.doesNotMatch(out, /ID:/, "filtered noise must not be stored by auto-sync");
+
+      const userMarker = "auto-sync-user-4b02";
+      const assistantMarker = "auto-sync-assistant-7c31";
+      await handler(session, {
+        type: "user/message",
+        data: { id: "test-id-2", role: "user", content: [{ type: "text", text: "regular user message " + userMarker }], source: { kind: "user" } },
+      });
+      await handler(session, {
+        type: "assistant/message",
+        data: { message: { role: "assistant", content: [{ type: "text", text: "intermediate assistant output " + assistantMarker }] } },
+      });
+      await handler(session, { type: "turn/end", data: { turn: 2 } });
+      const userOut = await run("recall", [userMarker, "5"]);
+      assert.match(userOut, /ID:/, "real user conversation must be stored at turn end");
+      const assistantOut = await run("recall", [assistantMarker, "5"]);
+      assert.doesNotMatch(assistantOut, new RegExp(`Content: .*${assistantMarker}`), "assistant output is opt-in via sync_roles");
+    } finally {
+      writeMnemosyneConfigYaml(dataDir, { ignore_patterns: "", sync_roles: "user" });
+    }
+  });
+
+  it("auto-sync ignores skill catalogs and agent instructions", async () => {
+    const { ctx, sessionEvents } = createMockCtx();
+    apply(ctx, { cli: CLI, dataDir, autoSync: true });
+    const handler = sessionEvents[0];
+    const session = { id: "session-auto-injected", header: { createdAt: 2 } };
+    const marker = "injected-skill-catalog-8af1";
+    for (const kind of ["skill-catalog", "agent-instructions", "plugin"]) {
+      await handler(session, {
+        type: "user/message",
+        data: { role: "user", content: [{ type: "text", text: marker + " " + kind }], source: { kind } },
+      });
+    }
+    await handler(session, { type: "turn/end", data: { turn: 1 } });
+    const out = await run("recall", [marker, "5"]);
+    assert.doesNotMatch(out, /ID:/);
   });
 });

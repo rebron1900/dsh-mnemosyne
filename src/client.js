@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
 
   const React = require("react");
   const h = React.createElement;
-  const { useState, useCallback, useEffect, useMemo, useSyncExternalStore } = React;
+  const { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } = React;
 
   const NS = "dsh-mnemosyne";
   const LOCALE = {
@@ -44,23 +44,39 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       groupPlugin: "插件",
       groupPlugin_hint: "dsh-mnemosyne 插件自身行为。这些参数控制 CLI 调用方式与数据存放位置，仅作用于 dsh-mnemosyne，不影响 mnemosyne CLI 本体。",
       groupEmbedding: "Embedding",
-      groupEmbedding_hint: "语义检索的向量化模型。mnemosyne 默认用 paraphrase-multilingual-MiniLM-L12-v2（384 维，多语言），需 fastembed 库。禁用后退回关键词检索（FTS5），仍可用但语义匹配能力下降。",
+      groupEmbedding_hint: "语义检索的向量化模型。mnemosyne 默认用 BAAI/bge-small-en-v1.5（384 维，英文），需 fastembed 库。禁用后退回关键词检索（FTS5），仍可用但语义匹配能力下降。",
       groupLLM: "LLM 整合",
       groupLLM_hint: "sleep() 整合时用 LLM 提炼摘要。启用后优先用远程 API，失败回退本地 GGUF（MiniCPM5-1B，约 656MB），再失败用 AAAK 关键词编码。不启用则只用 AAAK。",
       groupRecall: "召回调优",
       groupRecall_hint: "默认召回路径有词法门槛——长查询（4+词）需 30% 词面匹配才进入向量打分，对话式提问容易被误杀。开启多义召回可让向量证据单独准入，改善语义匹配。",
       groupWM: "工作记忆",
-      groupWM_hint: "工作记忆是短期热数据层。auto_sleep / sleep_threshold / ignore_patterns 是 config.yaml 键（mnemosyne CLI 读取 dataDir/config.yaml），其余为环境变量。",
+      groupWM_hint: "工作记忆是短期热数据层。auto_sleep_enabled / sleep_threshold / ignore_patterns 是 config.yaml 键（mnemosyne CLI 读取 dataDir/config.yaml），其余为环境变量。",
       groupAuto: "自动记忆",
       groupAuto_hint: "自动记忆功能默认全部关闭，保持手动调用模式。开启后插件自动存储对话、注入记忆上下文，无需模型主动调用 mnemosyne 工具。",
       f_promptSection: "Prompt 声明段",
       f_promptSection_hint: "在 system prompt 注入 '# Mnemosyne Memory' 段，告诉模型记忆工具可用。仅在需要提醒模型记忆存在时开启。",
       f_autoSync: "自动存储对话",
-      f_autoSync_hint: "每轮对话后自动将 user/assistant 消息存入 Mnemosyne 情景记忆，无需模型主动调用 mnemosyne_remember。开启后对话上下文自动持久化。",
+      f_autoSync_hint: "每轮对话后自动将消息存入 Mnemosyne，无需模型主动调用 mnemosyne_remember。默认仅保存用户消息（避免助手/工具中间输出入库）；需要保存助手回复时在「自动同步角色」中加入 assistant。",
       f_autoPrefetch: "自动召回注入",
       f_autoPrefetch_hint: "每个模型步骤前自动 recall 相关记忆并注入对话流，模型无需调用 mnemosyne_recall 即可看到先验上下文。每步增加一次 CLI 调用开销。",
       f_sessionScope: "会话隔离",
       f_sessionScope_hint: "按 DSH 会话分区记忆（session_id 列）：每个会话只召回自己的记录 + global 行。开启前请先把已有 'default' 会话的记忆迁移到 global，否则旧记忆不可见。",
+      migrate: "迁移 default 会话记忆到 global",
+      migrateHint: "把历史 'default' 会话的记忆转为 global 作用域（所有会话可见）。仅在开启会话隔离前需要；迁移不改动内容、不删除任何记忆。",
+      migrateConfirm: "确认将 default 会话下的全部记忆转为 global 作用域？此操作可逆（仅改动库中的 scope 字段），不会删除任何记忆。",
+      migrateGo: "迁移",
+      migrateBusy: "迁移中…",
+      migrateDone: "已迁移",
+      migrateNone: "无需迁移（default 会话下没有非 global 记忆）",
+      migrateFail: "迁移失败",
+      migrateBack: "将 session-scoped 记忆迁回 default",
+      migrateBackHint: "关闭会话隔离时使用：把所有 dsh_* 会话记忆（scope='session'）迁回 'default' 共享命名空间，恢复关闭隔离前的可见性。反向操作需要先确认没有两个会话需要拆分。",
+      migrateBackConfirm: "确认将全部 session-scoped 记忆迁回 'default' 共享命名空间？此操作不可逆（已脱离原会话归属），仅改动库中的 session_id/scope 字段，不删除任何记忆。",
+      migrateBackGo: "迁回",
+      migrateBackBusy: "迁回中…",
+      migrateBackDone: "已迁回",
+      migrateBackNone: "无需迁回（没有 dsh_* 会话记忆）",
+      migrateBackFail: "迁回失败",
       f_prefetchTopK: "召回数量",
       f_prefetchTopK_hint: "自动召回注入时返回的记忆条数。增多可看到更多先验，但引入更多噪声。",
       f_prefetchMinQueryLen: "最小查询长度",
@@ -76,7 +92,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_noEmbeddings: "禁用 embedding",
       f_noEmbeddings_hint: "透传 MNEMOSYNE_NO_EMBEDDINGS=1。跳过 embedding 模型加载，仅用关键词检索（FTS5）。适合无 fastembed 或纯关键词场景。语义匹配能力会下降。",
       f_embeddingModel: "Embedding 模型",
-      f_embeddingModel_hint: "透传 MNEMOSYNE_EMBEDDING_MODEL。默认 paraphrase-multilingual-MiniLM-L12-v2（384维，多语言）。中文可用 BAAI/bge-small-zh-v1.5；纯英文可用 BAAI/bge-small-en-v1.5。更换模型后需 reindex。",
+      f_embeddingModel_hint: "透传 MNEMOSYNE_EMBEDDING_MODEL。默认 BAAI/bge-small-en-v1.5（384维，英文）。中文可用 BAAI/bge-small-zh-v1.5；多语言可用 sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2。更换模型后需 reindex。",
       f_embeddingDim: "维度",
       f_embeddingDim_hint: "透传 MNEMOSYNE_EMBEDDING_DIM。显式指定向量维度，优先级高于模型内置映射。未知模型必须填写，否则启动报错。更换维度需 reindex。",
       f_embeddingApiUrl: "Embedding API 地址",
@@ -100,11 +116,13 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_wmTtlHours: "工作记忆 TTL（小时）",
       f_wmTtlHours_hint: "透传 MNEMOSYNE_WM_TTL_HOURS，默认 168（7天）。未整合工作记忆的存活时间，超期淘汰。已整合条目不受此限。",
       f_autoSleep: "自动整合",
-      f_autoSleep_hint: "config.yaml 键 auto_sleep，默认 true。会话开始/结束时自动运行 sleep 整合，将工作记忆归档到长期层。设为 false 则仅手动调用 mnemosyne_sleep。",
+      f_autoSleep_hint: "config.yaml 键 auto_sleep_enabled，默认 true。会话开始/结束时自动运行 sleep 整合，将工作记忆归档到长期层。设为 false 则仅手动调用 mnemosyne_sleep。",
       f_sleepThreshold: "整合阈值",
       f_sleepThreshold_hint: "config.yaml 键 sleep_threshold，默认 20。触发自动整合所需的最少工作记忆条目数，低于此值跳过整合，避免琐碎会话浪费资源。",
       f_ignorePatterns: "忽略模式",
-      f_ignorePatterns_hint: "config.yaml 键 ignore_patterns。正则表达式列表（Python re 语法），匹配的内容在 remember() 时被静默丢弃。每行一个模式，如 ^pip install、^Traceback、^sudo 。",
+      f_ignorePatterns_hint: "记忆写入过滤器：每行一个正则（Python re 语法），匹配的内容在 remember() 时被静默丢弃（不入库、不参与召回）。示例：^git status、^pip install、^Traceback。插件会把此值注入 MNEMOSYNE_IGNORE_PATTERNS 环境变量（上游 store 路径只读 env，不读 config.yaml）。另：在 config.yaml 手动加 write_classifier: strict 可启用内置噪音/密钥过滤。",
+      f_syncRoles: "自动同步角色",
+      f_syncRoles_hint: "config.yaml 键 sync_roles，默认 user。自动存储时保存哪些角色，用逗号分隔：user、assistant。仅 user 时只存用户消息，避免把助手/工具中间输出写入记忆；需要回放助手回复时再加 assistant。",
       reset: "重置",
       statWorking: "工作记忆",
       statEpisodic: "情景记忆",
@@ -133,6 +151,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       depsReindexDone: "索引重建完成",
       depsReindexFail: "索引重建失败",
       depsReindexRunning: "索引重建已在后台进行中",
+      depsReindexBlocked: "请先保存或放弃未保存的修改，再重建索引",
     },
     en: {
       nav: "Mnemosyne",
@@ -163,23 +182,39 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       groupPlugin: "Plugin",
       groupPlugin_hint: "dsh-mnemosyne plugin behavior. These control CLI invocation and data location; they only affect the dsh plugin, not the mnemosyne CLI itself.",
       groupEmbedding: "Embedding",
-      groupEmbedding_hint: "Vector model for semantic retrieval. mnemosyne defaults to paraphrase-multilingual-MiniLM-L12-v2 (384-dim, multilingual), requires fastembed. Disabling falls back to keyword search (FTS5) — still works but loses semantic matching.",
+      groupEmbedding_hint: "Vector model for semantic retrieval. mnemosyne defaults to BAAI/bge-small-en-v1.5 (384-dim, English), requires fastembed. Disabling falls back to keyword search (FTS5) — still works but loses semantic matching.",
       groupLLM: "LLM consolidation",
       groupLLM_hint: "sleep() uses an LLM to distill summaries. When enabled, tries remote API first, then local GGUF (MiniCPM5-1B, ~656MB), then AAAK keyword encoding. Without it, only AAAK is used.",
       groupRecall: "Recall tuning",
       groupRecall_hint: "Default recall has a lexical gate — long queries (4+ tokens) need 30% surface match before vector scoring, which can cull semantically-matching rows. Polyphonic recall lets vector evidence admit rows on its own.",
       groupWM: "Working memory",
-      groupWM_hint: "Working memory is the short-term hot tier. auto_sleep / sleep_threshold / ignore_patterns are config.yaml keys (read from dataDir/config.yaml); the rest are environment variables.",
+      groupWM_hint: "Working memory is the short-term hot tier. auto_sleep_enabled / sleep_threshold / ignore_patterns are config.yaml keys (read from dataDir/config.yaml); the rest are environment variables.",
       groupAuto: "Automatic memory",
       groupAuto_hint: "Automatic memory features are all disabled by default, preserving manual-only behavior. When enabled, the plugin automatically stores conversations and injects memory context without the model calling mnemosyne tools.",
       f_promptSection: "Prompt section",
       f_promptSection_hint: "Inject a '# Mnemosyne Memory' section into the system prompt telling the model that memory tools are available. Enable only when you want to remind the model that memory exists.",
       f_autoSync: "Auto-sync conversation",
-      f_autoSync_hint: "Automatically store user/assistant messages to Mnemosyne episodic memory after each turn, without the model calling mnemosyne_remember. Conversation context persists automatically.",
+      f_autoSync_hint: "Automatically store messages to Mnemosyne without the model calling mnemosyne_remember. Defaults to saving user messages only (keeps assistant/tool intermediates out); add assistant in \"Auto-sync roles\" to store assistant replies too.",
       f_autoPrefetch: "Auto-prefetch",
       f_autoPrefetch_hint: "Recall relevant memories before each model step and inject them into the conversation, so the model sees prior context without calling mnemosyne_recall. Adds one CLI call per step.",
       f_sessionScope: "Session isolation",
       f_sessionScope_hint: "Partition memories per DSH session (session_id column): each session recalls only its own rows plus global ones. Migrate existing 'default'-session memories to global before enabling, or they become invisible.",
+      migrate: "Migrate default-session memories to global",
+      migrateHint: "Convert legacy 'default'-session memories to global scope (visible to all sessions). Only needed before enabling session isolation; contents are unchanged, nothing is deleted.",
+      migrateConfirm: "Convert all 'default'-session memories to global scope? Reversible (scope column only), no memory is deleted.",
+      migrateGo: "Migrate",
+      migrateBusy: "Migrating…",
+      migrateDone: "Migrated",
+      migrateNone: "Nothing to migrate (no non-global rows in the 'default' session)",
+      migrateFail: "Migration failed",
+      migrateBack: "Migrate session-scoped memories back to default",
+      migrateBackHint: "Use when turning session isolation off: move all dsh_* session memories (scope='session') back into the 'default' shared namespace so they become visible again without the plugin's session mapping. Confirm that no two sessions need to stay split before running.",
+      migrateBackConfirm: "Move all session-scoped memories back to the 'default' shared namespace? Not reversible (rows lose their session ownership); only session_id/scope columns change, no memory is deleted.",
+      migrateBackGo: "Migrate back",
+      migrateBackBusy: "Migrating back…",
+      migrateBackDone: "Migrated back",
+      migrateBackNone: "Nothing to migrate back (no dsh_* session memories)",
+      migrateBackFail: "Migration back failed",
       f_prefetchTopK: "Prefetch top-K",
       f_prefetchTopK_hint: "Number of memories to recall for auto-prefetch injection. Higher shows more prior context but adds noise.",
       f_prefetchMinQueryLen: "Min query length",
@@ -195,7 +230,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_noEmbeddings: "Disable embeddings",
       f_noEmbeddings_hint: "Sets MNEMOSYNE_NO_EMBEDDINGS=1. Skips embedding model, uses keyword-only retrieval (FTS5). Semantic matching is reduced but keyword search still works.",
       f_embeddingModel: "Embedding model",
-      f_embeddingModel_hint: "MNEMOSYNE_EMBEDDING_MODEL. Default paraphrase-multilingual-MiniLM-L12-v2 (384-dim, multilingual). Chinese: BAAI/bge-small-zh-v1.5; English-only: BAAI/bge-small-en-v1.5. Changing model requires reindex.",
+      f_embeddingModel_hint: "MNEMOSYNE_EMBEDDING_MODEL. Default BAAI/bge-small-en-v1.5 (384-dim, English). Chinese: BAAI/bge-small-zh-v1.5; multilingual: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2. Changing model requires reindex.",
       f_embeddingDim: "Dimensions",
       f_embeddingDim_hint: "MNEMOSYNE_EMBEDDING_DIM. Explicit vector dimension, overrides model's built-in mapping. Required for unknown models (startup fails otherwise). Changing dimension requires reindex.",
       f_embeddingApiUrl: "Embedding API URL",
@@ -219,11 +254,13 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_wmTtlHours: "WM TTL (hours)",
       f_wmTtlHours_hint: "MNEMOSYNE_WM_TTL_HOURS, default 168 (7 days). TTL for unconsolidated working-memory entries. Consolidated rows are exempt.",
       f_autoSleep: "Auto sleep",
-      f_autoSleep_hint: "config.yaml key auto_sleep, default true. Automatically runs sleep consolidation on session start/end, archiving working memory to the long-term tier. Set false to only trigger manually via mnemosyne_sleep.",
+      f_autoSleep_hint: "config.yaml key auto_sleep_enabled, default true. Automatically runs sleep consolidation on session start/end, archiving working memory to the long-term tier. Set false to only trigger manually via mnemosyne_sleep.",
       f_sleepThreshold: "Sleep threshold",
       f_sleepThreshold_hint: "config.yaml key sleep_threshold, default 20. Minimum working-memory entries required before auto-sleep triggers. Below this, consolidation is skipped to avoid wasting resources on trivial sessions.",
       f_ignorePatterns: "Ignore patterns",
-      f_ignorePatterns_hint: "config.yaml key ignore_patterns. Regex patterns (Python re syntax); matching content is silently dropped at remember() time. One pattern per line, e.g. ^pip install, ^Traceback, ^sudo .",
+      f_ignorePatterns_hint: "Write filter: one regex per line (Python re syntax); content matching any pattern is silently dropped at remember() time (never stored, never recalled). Examples: ^git status, ^pip install, ^Traceback. The plugin bridges this to the MNEMOSYNE_IGNORE_PATTERNS env var (upstream's store path reads env only, not config.yaml). Add write_classifier: strict to config.yaml to also enable the built-in noise/secret filters.",
+      f_syncRoles: "Auto-sync roles",
+      f_syncRoles_hint: "config.yaml key sync_roles, default user. Which roles auto-sync stores, comma-separated: user, assistant. \"user\" alone stores only user messages and keeps assistant/tool intermediates out of memory; add assistant to also replay assistant replies.",
       reset: "Reset",
       statWorking: "Working memory",
       statEpisodic: "Episodic memory",
@@ -252,6 +289,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       depsReindexDone: "Reindex complete",
       depsReindexFail: "Reindex failed",
       depsReindexRunning: "Reindex already running in the background",
+      depsReindexBlocked: "Save or discard unsaved changes before reindexing",
     },
   };
 
@@ -282,6 +320,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     { group: "groupWM", key: "autoSleep", type: "toggle", label: "f_autoSleep", hint: "f_autoSleep_hint", yaml: "auto_sleep_enabled" },
     { group: "groupWM", key: "sleepThreshold", type: "number", label: "f_sleepThreshold", hint: "f_sleepThreshold_hint", yaml: "sleep_threshold" },
     { group: "groupWM", key: "ignorePatterns", type: "area", label: "f_ignorePatterns", hint: "f_ignorePatterns_hint", yaml: "ignore_patterns" },
+    { group: "groupWM", key: "syncRoles", type: "text", label: "f_syncRoles", hint: "f_syncRoles_hint", yaml: "sync_roles" },
     { group: "groupAuto", key: "promptSection", type: "toggle", label: "f_promptSection", hint: "f_promptSection_hint" },
     { group: "groupAuto", key: "autoSync", type: "toggle", label: "f_autoSync", hint: "f_autoSync_hint" },
     { group: "groupAuto", key: "autoPrefetch", type: "toggle", label: "f_autoPrefetch", hint: "f_autoPrefetch_hint" },
@@ -301,7 +340,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     timeoutMs: 20000,
     dataDir: "~/.dsh/mnemosyne",
     noEmbeddings: false,
-    embeddingModel: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    embeddingModel: "BAAI/bge-small-en-v1.5",
     embeddingDim: 384,
     embeddingApiUrl: "",
     embeddingApiKey: "",
@@ -316,6 +355,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     autoSleep: true,
     sleepThreshold: 20,
     ignorePatterns: "",
+    syncRoles: "user",
     promptSection: false,
     autoSync: false,
     autoPrefetch: false,
@@ -454,14 +494,17 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const [diag, setDiag] = useState(null);
     const [busy, setBusy] = useState(null);
     const [msg, setMsg] = useState(null);
+    const [migrateMsg, setMigrateMsg] = useState(null);
     const [yamlConfig, setYamlConfig] = useState({});
     const [modelPickerOpen, setModelPickerOpen] = useState(false);
     const [modelChoice, setModelChoice] = useState("");
     const [modelCustom, setModelCustom] = useState("");
+    const modelPickerTriggerRef = useRef(null);
+    const modelModalRef = useRef(null);
     const [reindex, setReindex] = useState({ running: false, done: false, error: null });
 
     const refresh = useCallback(async () => {
-      setBusy("diag"); setMsg(null);
+      setBusy("diag"); setMsg(null); setMigrateMsg(null);
       try {
         const [diagRes, cfgRes] = await Promise.all([
           fetch("/mnemosyne/diagnose", { headers: { accept: "application/json" } }).then(r => r.json()),
@@ -476,7 +519,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     useEffect(() => { refresh(); }, [refresh]);
 
     const setup = async () => {
-      setBusy("setup"); setMsg(null);
+      setBusy("setup"); setMsg(null); setMigrateMsg(null);
       try {
         const r = await fetch("/mnemosyne/setup", { method: "POST" });
         const data = await r.json();
@@ -487,7 +530,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     };
 
     const installEmbedding = async () => {
-      setBusy("deps"); setMsg(null);
+      setBusy("deps"); setMsg(null); setMigrateMsg(null);
       try {
         const r = await fetch("/mnemosyne/install-embedding", { method: "POST" });
         const data = await r.json();
@@ -497,10 +540,60 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       finally { setBusy(null); }
     };
 
+    const closeModelPicker = useCallback(() => {
+      setModelPickerOpen(false);
+      const restore = () => modelPickerTriggerRef.current?.focus?.();
+      if (typeof queueMicrotask === "function") queueMicrotask(restore);
+      else if (typeof setTimeout === "function") setTimeout(restore, 0);
+    }, []);
+
+    useEffect(() => {
+      if (!modelPickerOpen) return;
+      const dialog = modelModalRef.current;
+      if (!dialog) return;
+      const focusable = dialog.querySelectorAll?.(
+        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      focusable?.[0]?.focus?.();
+    }, [modelPickerOpen]);
+
+    const handleModelModalKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeModelPicker();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const dialog = modelModalRef.current;
+      const focusable = dialog
+        ? [...(dialog.querySelectorAll?.(
+            'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ) || [])]
+        : [];
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog?.focus?.();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
     const saveModel = async () => {
+      if (isDirty || saving || reindex.running) {
+        setMsg(t("depsReindexBlocked"));
+        return;
+      }
       const model = modelChoice === "custom" ? modelCustom.trim() : modelChoice;
       if (!model) return;
-      setBusy("model"); setMsg(null);
+      setBusy("model"); setMsg(null); setMigrateMsg(null);
       try {
         // Auto-fill the embedding dimension for known models so switching
         // models doesn't leave a stale dim (e.g. zh model is 512d, not 384d).
@@ -514,7 +607,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data?.error || "HTTP " + r.status);
-        setModelPickerOpen(false);
+        closeModelPicker();
         setMsg(t("depsModelHint"));
         await refresh();
       } catch (e) { setMsg(t("depsInstallFail") + ": " + String(e?.message ?? e)); }
@@ -522,16 +615,26 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     };
 
     const startReindex = async () => {
+      if (isDirty || saving || busy || reindex.running) {
+        setMsg(t("depsReindexBlocked"));
+        return;
+      }
+      const savedModel = typeof yamlConfig.embedding_model === "string" ? yamlConfig.embedding_model.trim() : "";
+      if (!savedModel) {
+        setReindex({ running: false, done: false, error: "No saved embedding model" });
+        setMsg(t("depsReindexFail") + ": No saved embedding model");
+        return;
+      }
       setReindex({ running: true, done: false, error: null });
-      setMsg(null);
+      setMsg(null); setMigrateMsg(null);
       try {
         const r = await fetch("/mnemosyne/reindex", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: yamlConfig.embedding_model || undefined }),
+          body: JSON.stringify({ model: savedModel }),
         });
         const data = await r.json();
-        if (!r.ok) throw new Error(data?.error || "HTTP " + r.status);
+        if (!r.ok || !data.ok) throw new Error(data?.error || "HTTP " + r.status);
         if (data.alreadyRunning) setMsg(t("depsReindexRunning"));
       } catch (e) {
         setReindex({ running: false, done: false, error: String(e?.message ?? e) });
@@ -561,7 +664,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     }, [reindex.running]);
 
     const test = async () => {
-      setBusy("test"); setMsg(null);
+      setBusy("test"); setMsg(null); setMigrateMsg(null);
       try {
         const r = await fetch("/mnemosyne/test", { method: "POST" });
         const data = await r.json();
@@ -575,6 +678,44 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           setMsg(t("testFail") + ": " + (data.error || ""));
         }
       } catch (e) { setMsg(t("testFail") + ": " + String(e?.message ?? e)); }
+      finally { setBusy(null); }
+    };
+
+    const migrate = async () => {
+      if (typeof window !== "undefined" && !window.confirm(t("migrateConfirm"))) return;
+      setBusy("migrate"); setMigrateMsg(null); setMsg(null);
+      try {
+        const r = await fetch("/mnemosyne/migrate-default-session", { method: "POST" });
+        const data = await r.json();
+        if (data.ok) {
+          setMigrateMsg(
+            data.migrated > 0
+              ? `${t("migrateDone")} ${data.migrated} (working ${data.working} / episodic ${data.episodic})`
+              : t("migrateNone")
+          );
+        } else {
+          setMigrateMsg(t("migrateFail") + ": " + (data.error || ""));
+        }
+      } catch (e) { setMigrateMsg(t("migrateFail") + ": " + String(e?.message ?? e)); }
+      finally { setBusy(null); }
+    };
+
+    const migrateBack = async () => {
+      if (typeof window !== "undefined" && !window.confirm(t("migrateBackConfirm"))) return;
+      setBusy("migrateBack"); setMigrateMsg(null); setMsg(null);
+      try {
+        const r = await fetch("/mnemosyne/migrate-session-scopes-to-default", { method: "POST" });
+        const data = await r.json();
+        if (data.ok) {
+          setMigrateMsg(
+            data.migrated > 0
+              ? `${t("migrateBackDone")} ${data.migrated} (working ${data.working} / episodic ${data.episodic})`
+              : t("migrateBackNone")
+          );
+        } else {
+          setMigrateMsg(t("migrateBackFail") + ": " + (data.error || ""));
+        }
+      } catch (e) { setMigrateMsg(t("migrateBackFail") + ": " + String(e?.message ?? e)); }
       finally { setBusy(null); }
     };
 
@@ -613,28 +754,53 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const setDraft = (key, value) => { setDrafts((d) => ({ ...d, [key]: value })); setFailedFields([]); };
     const clearDrafts = () => { setDrafts({}); setFailedFields([]); };
 
+    const scopeSnapshot = () => (scope && typeof scope.getSnapshot === "function" ? scope.getSnapshot() : null);
+    const scopeSetConfirmed = (key, value) => {
+      const current = scopeSnapshot();
+      if (!current || !Object.is(current.value?.[key], value)) return false;
+      return current.user === undefined || Object.hasOwn(current.user, key) && Object.is(current.user[key], value);
+    };
+    const scopeUnsetConfirmed = (key) => {
+      const current = scopeSnapshot();
+      if (!current) return false;
+      if (current.user !== undefined) return !Object.hasOwn(current.user, key);
+      return current.base === undefined
+        ? !Object.hasOwn(current.value || {}, key)
+        : Object.is(current.value?.[key], current.base?.[key]);
+    };
+    const removeDrafts = (keys) => setDrafts((d) => {
+      const n = { ...d };
+      for (const key of keys) delete n[key];
+      return n;
+    });
+
     const save = async () => {
       setSaving(true); setFailedFields([]);
       const failed = [];
-      // Split drafts: dsh-only keys go to settings scope, config.yaml keys to HTTP route
       const settingsDrafts = {};
       const yamlPayload = {};
       for (const key of Object.keys(drafts)) {
         const f = FIELDS.find((x) => x.key === key);
-        if (f && f.yaml) {
-          yamlPayload[f.yaml] = drafts[key];
-        } else {
-          settingsDrafts[key] = drafts[key];
-        }
+        if (f && f.yaml) yamlPayload[f.yaml] = drafts[key];
+        else settingsDrafts[key] = drafts[key];
       }
-      // Save dsh-only keys via settings scope
-      if (scope && typeof scope.set === "function") {
-        for (const key of Object.keys(settingsDrafts)) {
-          try { await scope.set(key, settingsDrafts[key]); } catch { failed.push(key); }
-        }
+      for (const key of Object.keys(settingsDrafts)) {
+        const f = FIELDS.find((x) => x.key === key);
+        try {
+          if (!scope) throw new Error("settings scope unavailable");
+          if (f?.type === "number" && settingsDrafts[key] === "") {
+            if (typeof scope.unset !== "function") throw new Error("settings scope cannot unset");
+            await scope.unset(key);
+            if (!scopeUnsetConfirmed(key)) throw new Error("settings unset was not confirmed");
+          } else {
+            if (typeof scope.set !== "function") throw new Error("settings scope cannot set");
+            await scope.set(key, settingsDrafts[key]);
+            if (!scopeSetConfirmed(key, settingsDrafts[key])) throw new Error("settings write was not confirmed");
+          }
+        } catch { failed.push(key); }
       }
-      // Save config.yaml keys via HTTP route
-      if (Object.keys(yamlPayload).length > 0) {
+      const yamlKeys = Object.keys(yamlPayload).map((yamlKey) => FIELDS.find((f) => f.yaml === yamlKey)?.key).filter(Boolean);
+      if (yamlKeys.length > 0) {
         try {
           const r = await fetch("/mnemosyne/config", {
             method: "POST",
@@ -642,39 +808,65 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
             body: JSON.stringify(yamlPayload),
           });
           if (!r.ok) throw new Error("HTTP " + r.status);
-          // Refresh yaml config after write
-          const cfgRes = await fetch("/mnemosyne/config").then((r) => r.json()).catch(() => ({ ok: false }));
-          if (cfgRes.ok && cfgRes.config) setYamlConfig(cfgRes.config);
-        } catch { failed.push(...Object.keys(drafts).filter((k) => FIELD_TO_YAML[k])); }
+          const cfgRes = await fetch("/mnemosyne/config").then((response) => response.json());
+          if (!cfgRes.ok || !cfgRes.config) throw new Error("config read-back failed");
+          setYamlConfig(cfgRes.config);
+          for (const key of yamlKeys) {
+            const yamlKey = FIELD_TO_YAML[key];
+            if (!Object.is(cfgRes.config[yamlKey], yamlPayload[yamlKey])) failed.push(key);
+          }
+        } catch { failed.push(...yamlKeys); }
       }
+      const uniqueFailed = [...new Set(failed)];
+      removeDrafts(Object.keys(drafts).filter((key) => !uniqueFailed.includes(key)));
       setSaving(false);
-      if (failed.length > 0) setFailedFields(failed);
-      else setDrafts({});
+      setFailedFields(uniqueFailed);
     };
 
     const resetField = async (key) => {
       const f = FIELDS.find((x) => x.key === key);
       if (f && f.yaml) {
-        // config.yaml fields have no per-field reset on the host — discarding
-        // the draft restores the displayed server value.
         setDrafts((d) => { const n = { ...d }; delete n[key]; return n; });
         return;
       }
-      if (!scope || typeof scope.set !== "function") return;
-      try { await scope.set(key, undefined); setDrafts((d) => { const n = { ...d }; delete n[key]; return n; }); }
-      catch { setFailedFields([key]); }
+      if (!scope || typeof scope.unset !== "function") { setFailedFields([key]); return; }
+      try {
+        await scope.unset(key);
+        if (!scopeUnsetConfirmed(key)) throw new Error("settings unset was not confirmed");
+        removeDrafts([key]);
+        setFailedFields((fields) => fields.filter((field) => field !== key));
+      } catch { setFailedFields((fields) => [...new Set([...fields, key])]); }
     };
 
     const resetAll = async () => {
       setSaving(true); setFailedFields([]);
+      const dshFields = FIELDS.filter((f) => !f.yaml);
+      const yamlFields = FIELDS.filter((f) => f.yaml);
+      const succeeded = [];
+      const failed = [];
+      for (const field of dshFields) {
+        try {
+          if (!scope || typeof scope.unset !== "function") throw new Error("settings scope cannot unset");
+          await scope.unset(field.key);
+          if (!scopeUnsetConfirmed(field.key)) throw new Error("settings unset was not confirmed");
+          succeeded.push(field.key);
+        } catch {
+          failed.push(field.key);
+        }
+      }
       try {
         const r = await fetch("/mnemosyne/config", { method: "DELETE" });
         if (!r.ok) throw new Error("HTTP " + r.status);
-        const cfgRes = await fetch("/mnemosyne/config").then((r) => r.json()).catch(() => ({ ok: false }));
-        if (cfgRes.ok && cfgRes.config) setYamlConfig(cfgRes.config);
-        setDrafts({});
-      } catch { setFailedFields(["reset"]); }
-      finally { setSaving(false); }
+        const cfgRes = await fetch("/mnemosyne/config").then((response) => response.json());
+        if (!cfgRes.ok || !cfgRes.config) throw new Error("config read-back failed");
+        setYamlConfig(cfgRes.config);
+        succeeded.push(...yamlFields.map((f) => f.key));
+      } catch {
+        failed.push(...yamlFields.map((f) => f.key));
+      }
+      removeDrafts(succeeded);
+      setFailedFields(failed);
+      setSaving(false);
     };
 
     const metrics = diag?.metrics;
@@ -718,7 +910,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
             ),
           ),
           h("div", { className: "mn-field-right", style: { paddingTop: 8 } },
-            h("input", { type: "checkbox", id: inputId, className: "mn-check", checked: val === true, onChange: (e) => setDraft(f.key, e.target.checked) }),
+            h("input", { type: "checkbox", id: inputId, className: "mn-check", checked: val === true, disabled: reindex.running && (f.key === "embeddingModel" || f.key === "embeddingDim"), onChange: (e) => setDraft(f.key, e.target.checked) }),
           ),
         );
       }
@@ -729,6 +921,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         value: val,
         placeholder: placeholder(f.key) || undefined,
         "aria-describedby": hintId,
+        disabled: reindex.running && (f.key === "embeddingModel" || f.key === "embeddingDim"),
         onChange: (e) => setDraft(f.key, f.type === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value),
       };
       if (f.type === "area") inputProps.rows = 3;
@@ -766,6 +959,49 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         ) : null,
       );
     };
+
+    // Migrate row shown inside the 自动记忆 card, right under 会话隔离:
+    // converts legacy "default"-session memories to global scope.
+    const renderMigrateRow = () => h("div", { className: "mn-field", key: "migrate-default" },
+      h("div", { className: "mn-field-left" },
+        h("div", { className: "mn-field-head" },
+          h("label", { className: "mn-label" }, t("migrate")),
+          h("span", { className: "mn-help", tabIndex: 0, "aria-label": t("migrateHint") },
+            "?",
+            h("span", { className: "mn-tooltip", role: "note" }, t("migrateHint")),
+          ),
+        ),
+      ),
+      h("div", { className: "mn-field-right" },
+        h("button", {
+          type: "button",
+          className: "mn-btn mn-deps-btn",
+          disabled: !!busy || !diag?.cliReady,
+          onClick: migrate,
+        }, busy === "migrate" ? t("migrateBusy") : t("migrateGo")),
+      ),
+    );
+
+    const renderMigrateBackRow = () => h("div", { className: "mn-field", key: "migrate-back" },
+      h("div", { className: "mn-field-left" },
+        h("div", { className: "mn-field-head" },
+          h("label", { className: "mn-label" }, t("migrateBack")),
+          h("span", { className: "mn-help", tabIndex: 0, "aria-label": t("migrateBackHint") },
+            "?",
+            h("span", { className: "mn-tooltip", role: "note" }, t("migrateBackHint")),
+          ),
+        ),
+      ),
+      h("div", { className: "mn-field-right" },
+        h("button", {
+          type: "button",
+          className: "mn-btn mn-deps-btn",
+          disabled: !!busy || !diag?.cliReady,
+          onClick: migrateBack,
+        }, busy === "migrateBack" ? t("migrateBackBusy") : t("migrateBackGo")),
+        // Result shown through migrateMsg (shared with the default→global row)
+      ),
+    );
 
     return h(React.Fragment, null,
       // Card 1: Status & actions
@@ -835,7 +1071,9 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
               type: "button",
               className: "mn-btn mn-deps-btn",
               disabled: !!busy || !diag?.cliReady,
-              onClick: () => { setModelPickerOpen(true); setModelChoice(""); setModelCustom(""); },
+                             disabled: !!busy || !diag?.cliReady || isDirty || saving || reindex.running,
+               ref: modelPickerTriggerRef,
+               onClick: () => { setModelPickerOpen(true); setModelChoice(""); setModelCustom(""); },
             }, t("depsModelChoose")),
             h("button", {
               type: "button",
@@ -851,10 +1089,10 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         ),
         msg ? h("div", { className: "mn-msg", role: "status" }, msg) : null,
         // Model picker modal
-        modelPickerOpen ? h("div", { className: "mn-modal", role: "dialog", "aria-modal": "true", "aria-label": t("depsModelTitle") },
-          h("div", { className: "mn-modal-box" },
-            h("div", { className: "mn-modal-title" }, t("depsModelTitle")),
-            h("div", { className: "mn-modal-hint" }, t("depsModelHint")),
+        modelPickerOpen ? h("div", { className: "mn-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "mn-model-dialog-title", "aria-describedby": "mn-model-dialog-hint", onKeyDown: handleModelModalKeyDown },
+          h("div", { className: "mn-modal-box", ref: modelModalRef, tabIndex: -1 },
+            h("div", { className: "mn-modal-title", id: "mn-model-dialog-title" }, t("depsModelTitle")),
+            h("div", { className: "mn-modal-hint", id: "mn-model-dialog-hint" }, t("depsModelHint")),
             h("label", { className: "mn-modal-opt" },
               h("input", { type: "radio", name: "mn-model", checked: modelChoice === "BAAI/bge-small-en-v1.5", onChange: () => setModelChoice("BAAI/bge-small-en-v1.5") }),
               "BAAI/bge-small-en-v1.5 (English, 384d)"),
@@ -868,12 +1106,12 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
               h("input", { type: "radio", name: "mn-model", checked: modelChoice === "custom", onChange: () => setModelChoice("custom") }),
               t("depsModelCustom")),
             modelChoice === "custom" ? h("input", {
-              type: "text", className: "mn-input", value: modelCustom,
+              type: "text", id: "mn-model-custom", className: "mn-input", value: modelCustom,
               placeholder: t("depsModelPlaceholder"),
               onChange: (e) => setModelCustom(e.target.value),
             }) : null,
             h("div", { className: "mn-modal-actions" },
-              h("button", { type: "button", className: "mn-btn", disabled: busy === "model", onClick: () => setModelPickerOpen(false) }, t("depsModelCancel")),
+              h("button", { type: "button", className: "mn-btn", disabled: busy === "model", onClick: closeModelPicker }, t("depsModelCancel")),
               h("button", { type: "button", className: "mn-btn mn-btn-save", disabled: busy === "model" || (modelChoice === "custom" && !modelCustom.trim()), onClick: saveModel },
                 busy === "model" ? t("depsInstalling") : t("depsModelConfirm")),
             ),
@@ -895,7 +1133,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       // Config cards — one per group
       ...groupOrder.map((g) =>
         groups[g] ? renderCard(g, t(g), false,
-          groups[g].map(renderField),
+          [...groups[g].map(renderField), ...(g === "groupAuto" ? [renderMigrateRow(), renderMigrateBackRow(), migrateMsg ? h("div", { className: "mn-msg", role: "status", key: "migrate-msg" }, migrateMsg) : null] : [])],
           t(g + "_hint"),
         ) : null,
       ),

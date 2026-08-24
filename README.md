@@ -4,6 +4,10 @@ English | [简体中文](./README.zh-CN.md)
 
 > A [DeepSeek Harness](https://github.com/deepseek-ai) plugin for [Mnemosyne](https://github.com/mnemosyne-oss/mnemosyne) — local-first, SQLite-backed cross-session memory.
 
+![dsh-mnemosyne project banner](./assets/mnemosyne-banner.png)
+
+> Local-first memory for DSH: remember, recall, and consolidate context across sessions.
+
 ## About Mnemosyne
 
 [Mnemosyne](https://github.com/mnemosyne-oss/mnemosyne) is a zero-cloud, SQLite-backed, local-first AI memory system. One `pip install`, one SQLite file, no external services required. It uses a **BEAM** (Bilevel Episodic-Associative Memory) architecture:
@@ -16,7 +20,7 @@ Mnemosyne supports MCP, Python SDK, and multiple agent frameworks (Claude Code, 
 
 ## About Pi-mnemosyne
 
-This plugin is ported from [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mnemosyne-oss/pi-mnemosyne) — the official [Pi coding agent](https://pi.dev/) extension for Mnemosyne. Pi-mnemosyne contains no memory logic itself: all capabilities live in the `mnemosyne` CLI (`pip install mnemosyne-memory`), and the plugin acts as a stateless proxy between tool schemas and CLI arguments. The port to DSH preserves this architecture while adding a settings panel, automatic CLI installation, config management, and turn-end auto-consolidation.
+This plugin is ported from [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mnemosyne-oss/pi-mnemosyne) — the official [Pi coding agent](https://pi.dev/) extension for Mnemosyne. All memory logic lives in the `mnemosyne` CLI (`pip install mnemosyne-memory`), and the plugin stays CLI-first: normal shared-memory operations shell out to the CLI. The port to DSH adds a settings panel, automatic CLI installation, config management, turn-end auto-consolidation, and — beyond the original stateless proxy — a few thin bridges that do not reimplement memory logic: a small Python helper run through the CLI's venv interpreter for session-scoped access, direct-SQLite scope migrations, and an env bridge for the write filter (`ignore_patterns` / `write_classifier`).
 
 ## Features
 
@@ -28,10 +32,11 @@ This plugin is ported from [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mn
 - **Config sync**: The panel reads actual values from the flat `config.yaml`; empty fields show default placeholders; saving triggers `mnemosyne config reload`
 - **Reset to defaults**: The panel footer resets all managed config keys to Mnemosyne upstream defaults
 - **Auto-consolidation**: On each `turn/end`, checks working memory count and runs `mnemosyne sleep` when the threshold is met
-- **Automatic memory (opt-in)**: Three optional features that automate memory operations — all disabled by default, preserving manual-only behavior:
+- **Automatic memory (opt-in)**: Optional features that automate memory operations — all disabled by default, preserving manual-only behavior:
   - **Prompt section** — Injects a `# Mnemosyne Memory` header into the system prompt so the model knows memory is available
-  - **Auto-sync** — Automatically stores user/assistant messages to Mnemosyne after each turn, so conversation context persists without manual `mnemosyne_remember` calls
+  - **Auto-sync** — Automatically stores genuine user messages (not assistant output) to Mnemosyne after each turn, so conversation context persists without manual `mnemosyne_remember` calls; injected context messages — `plugin` (e.g. this plugin's own prefetch), `agent-instructions` (workspace instructions), and `skill-catalog` (the available-skills reminder) — are never stored
   - **Auto-prefetch** — Recalls relevant memories before each model step and injects them into the conversation, so the model sees prior context without calling `mnemosyne_recall`
+  - **Session isolation** — Partitions memories per DSH session via the engine's `session_id` column: each session only recalls its own rows plus `global`-scope ones. Subagents share their root session's memory. Session ids are derived from the persisted session header (`createdAt`), so memory stays attached to a resumed session across DSH restarts. `global` rows are shared **read-write**: every session can recall, and also delete, them. The panel offers a one-click migration of legacy `default`-session memories to `global` before enabling; `cross_session` recall is not supported
 
 ## Installation
 
@@ -67,12 +72,16 @@ Configuration comes from two sources: the plugin's own DSH settings (`~/.dsh/set
 | LLM | `llmEnabled` / `llmBaseUrl` / `llmApiKey` / `llmModel` / `llmTimeout` | config.yaml `llm_*` |
 | Recall | `polyphonicRecall` | config.yaml `polyphonic_recall` |
 | Working Memory | `wmMaxItems` / `wmTtlHours` | config.yaml `wm_*` |
-| Working Memory | `autoSleep` / `sleepThreshold` / `ignorePatterns` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` |
-| Automatic Memory | `promptSection` / `autoSync` / `autoPrefetch` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
+| Working Memory | `autoSleep` / `sleepThreshold` / `ignorePatterns` / `syncRoles` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` / `sync_roles` |
+| Automatic Memory | `promptSection` / `autoSync` / `autoPrefetch` / `sessionScope` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
 
 > **Note**: The Automatic Memory fields are DSH-side config (saved via the Settings panel, not written to `config.yaml`). They take effect at runtime via the settings watcher — no DSH restart needed.
 
+> **Session isolation caveat**: enabling `sessionScope` makes existing memories invisible — they live in the legacy `default` session and session-scoped recall only sees the current session plus `global` rows. Migrate them first with the panel's "Migrate default-session memories to global" button (in the Automatic Memory card). The inverse action, "Move session-scoped memories back to default", deliberately merges `dsh_*` session rows into the shared legacy namespace and loses their per-session attribution. `global` rows are visible **and deletable** by every session, and the upstream `cross_session` recall switch is forcibly disabled for session-scoped recall. The config panel only returns the fields it manages — an allow-list — and secret values are masked (`***`); stored values are never sent back to the browser.
+
 Saving writes to the corresponding config file and runs `mnemosyne config reload`. "Reset to Defaults" restores all panel-managed keys to Mnemosyne upstream defaults; additional config can be edited directly in `~/.dsh/mnemosyne/config.yaml`. Most settings hot-reload except `vec_type` and other startup-bound options.
+
+The panel-managed `ignorePatterns` (Working Memory group) is a regex filter — one pattern per line (Python `re` syntax), content matching any pattern is silently dropped at `remember()` time (e.g. `^git status`, `^pip install`, `^Traceback`). The plugin bridges it to `MNEMOSYNE_IGNORE_PATTERNS` on every CLI call, because upstream's write filter reads env only. Adding `write_classifier: strict` to `config.yaml` additionally enables the built-in noise/secret/structure filters.
 
 ## Architecture
 
@@ -99,7 +108,7 @@ Saving writes to the corresponding config file and runs `mnemosyne config reload
 └──────────────────────────────────────┘
 ```
 
-The plugin itself contains no memory logic — it's a stateless proxy from DSH tool schemas to `mnemosyne` CLI arguments, consistent with the Pi-mnemosyne architecture.
+The plugin stays CLI-first: shared-memory operations use the `mnemosyne` CLI, while session-scoped operations use a small Python helper through the CLI's venv interpreter. No memory logic is reimplemented in Node. It is no longer a *pure* stateless proxy, though, because the migration route writes SQLite scope metadata directly and the write-filter env bridge reads `config.yaml` on every call.
 
 ## Design Document
 
@@ -109,7 +118,7 @@ See [docs/design.md](docs/design.md).
 
 ```bash
 pnpm install
-pnpm test        # node --test (65 tests: unit + integration + client)
+pnpm test        # node --test (99 tests: 81 unit + 15 integration + 3 client)
 ```
 
 ## License

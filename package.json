@@ -1,6 +1,6 @@
 {
   "name": "dsh-mnemosyne",
-  "version": "0.4.0",
+  "version": "0.4.3",
   "description": "Mnemosyne memory for DeepSeek Harness: remember / recall / forget / stats / sleep tools, embedded skill, auto-setup, optional auto-sync/prefetch, and a Settings panel. Data lives under ~/.dsh/mnemosyne.",
   "keywords": [
     "deepseek-harness",
@@ -20,8 +20,11 @@
   },
   "files": [
     "src",
+    "assets",
     "cordis.patch.yml",
     "README.md",
+    "README.zh-CN.md",
+    "docs",
     "LICENSE"
   ],
   "scripts": {
