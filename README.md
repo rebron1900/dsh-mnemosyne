@@ -41,6 +41,7 @@ This plugin is ported from [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mn
 ## Installation
 
 ```bash
+# Install the published plugin into the web profile
 dsh plugin --profile web add dsh-mnemosyne
 # After restarting the profile, open Settings > Mnemosyne and click Setup to install the CLI
 # Or manually: uv tool install mnemosyne-memory

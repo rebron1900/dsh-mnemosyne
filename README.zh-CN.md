@@ -41,6 +41,7 @@ Mnemosyne 支持 MCP、Python SDK 及多种 agent 框架（Claude Code、Cursor�
 ## 安装
 
 ```bash
+# 将已发布的插件安装到 web profile
 dsh plugin --profile web add dsh-mnemosyne
 # 重启 profile 后，打开 Settings > Mnemosyne，点 Setup 自动安装 CLI
 # 或手动：uv tool install mnemosyne-memory
