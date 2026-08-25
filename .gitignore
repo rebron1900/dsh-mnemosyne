@@ -30,3 +30,7 @@ coverage/
 
 # pnpm
 .pnpm-store/
+
+
+.dsh-vision-router
+.storefront-sync/
