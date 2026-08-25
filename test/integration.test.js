@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { apply, migrateDefaultSessionToGlobal, migrateSessionScopesToDefault, recallArgs, resolveCli, resolvePythonInterp, runMnemosyne, storeArgs, writeMnemosyneConfigYaml } from "../src/index.js";
+import { apply, countConsolidations, migrateDefaultSessionToGlobal, migrateSessionScopesToDefault, recallArgs, resolveCli, resolvePythonInterp, runMnemosyne, storeArgs, writeMnemosyneConfigYaml } from "../src/index.js";
 
 const CLI = resolveCli("mnemosyne");
 const TIMEOUT = 30_000;
@@ -25,10 +25,15 @@ let savedEnv;
 function createMockCtx() {
   const tools = [];
   const sessionEvents = [];
+  const disposedHandlers = [];
   const ctx = {
     get: () => undefined, // no skills service in the minimal host
     effect: (fn) => fn(),
-    on: (name, fn) => { if (name === "session/event") sessionEvents.push(fn); return () => {}; },
+    on: (name, fn) => {
+      if (name === "session/event") sessionEvents.push(fn);
+      if (name === "session/disposed") disposedHandlers.push(fn);
+      return () => {};
+    },
     inject: (deps, fn) => {
       if (deps[0] === "tools") {
         fn({ effect: (fn) => fn(), tools: { register: (def) => (tools.push(def), () => {}) } });
@@ -41,7 +46,7 @@ function createMockCtx() {
       }
     },
   };
-  return { ctx, tools, sessionEvents };
+  return { ctx, tools, sessionEvents, disposedHandlers };
 }
 
 suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
@@ -72,6 +77,16 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
   });
 
   const run = (command, args) => runMnemosyne(CLI, command, args, TIMEOUT);
+  const waitForMatch = async (query, pattern, timeoutMs = 15_000) => {
+    const deadline = Date.now() + timeoutMs;
+    let output = "";
+    while (Date.now() < deadline) {
+      output = await run("recall", [query, "5"]);
+      if (pattern.test(output)) return output;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return output;
+  };
 
   it("stats on a fresh isolated store shows zero totals", async () => {
     const out = await run("stats", []);
@@ -256,7 +271,7 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
     writeMnemosyneConfigYaml(dataDir, { ignore_patterns: "^git status", sync_roles: "user" });
     try {
       const { ctx, sessionEvents } = createMockCtx();
-      apply(ctx, { cli: CLI, dataDir, autoSync: true });
+      apply(ctx, { cli: CLI, dataDir, autoSync: true, sessionScope: false });
       const handler = sessionEvents[0];
       const session = { id: "session-auto-sync", header: { createdAt: 1 } };
       const marker = "noise-token-9c1e";
@@ -265,8 +280,8 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
         data: { id: "test-id", role: "user", content: [{ type: "text", text: "git status\nOn branch main " + marker }], source: { kind: "user" } },
       });
       await handler(session, { type: "turn/end", data: { turn: 1 } });
-      const out = await run("recall", [marker, "5"]);
-      assert.doesNotMatch(out, /ID:/, "filtered noise must not be stored by auto-sync");
+      const outBeforeNormal = await run("recall", [marker, "5"]);
+      assert.doesNotMatch(outBeforeNormal, /ID:/, "filtered noise must not be stored by auto-sync");
 
       const userMarker = "auto-sync-user-4b02";
       const assistantMarker = "auto-sync-assistant-7c31";
@@ -279,13 +294,62 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
         data: { message: { role: "assistant", content: [{ type: "text", text: "intermediate assistant output " + assistantMarker }] } },
       });
       await handler(session, { type: "turn/end", data: { turn: 2 } });
-      const userOut = await run("recall", [userMarker, "5"]);
+      const userOut = await waitForMatch(userMarker, /ID:/);
       assert.match(userOut, /ID:/, "real user conversation must be stored at turn end");
       const assistantOut = await run("recall", [assistantMarker, "5"]);
       assert.doesNotMatch(assistantOut, new RegExp(`Content: .*${assistantMarker}`), "assistant output is opt-in via sync_roles");
     } finally {
       writeMnemosyneConfigYaml(dataDir, { ignore_patterns: "", sync_roles: "user" });
     }
+  });
+
+  it("auto-sync applies Hermes limits and zero preserves the full user message", async () => {
+    const keptMarker = "sync-limit-kept-61ab";
+    const cutMarker = "sync-limit-cut-9e42";
+    const limited = createMockCtx();
+    apply(limited.ctx, {
+      cli: CLI,
+      dataDir,
+      autoSync: true,
+      sessionScope: false,
+      syncTurnUserLimit: keptMarker.length,
+    });
+    const limitedSession = { id: "session-sync-limit", header: { createdAt: 3 } };
+    await limited.sessionEvents[0](limitedSession, {
+      type: "user/message",
+      data: {
+        role: "user",
+        content: [{ type: "text", text: `${keptMarker} ${"x".repeat(80)} ${cutMarker}` }],
+        source: { kind: "user" },
+      },
+    });
+    await limited.sessionEvents[0](limitedSession, { type: "turn/end", data: { turn: 1 } });
+    assert.match(await waitForMatch(keptMarker, /ID:/), /ID:/);
+    assert.doesNotMatch(
+      await run("recall", [cutMarker, "5"]),
+      new RegExp(`Content: .*${cutMarker}`),
+    );
+
+    const tailMarker = "sync-limit-full-tail-74cd";
+    const unlimited = createMockCtx();
+    apply(unlimited.ctx, {
+      cli: CLI,
+      dataDir,
+      autoSync: true,
+      sessionScope: false,
+      syncTurnUserLimit: 0,
+    });
+    const unlimitedSession = { id: "session-sync-unlimited", header: { createdAt: 4 } };
+    await unlimited.sessionEvents[0](unlimitedSession, {
+      type: "user/message",
+      data: {
+        role: "user",
+        content: [{ type: "text", text: `full message ${"y".repeat(700)} ${tailMarker}` }],
+        source: { kind: "user" },
+      },
+    });
+    await unlimited.sessionEvents[0](unlimitedSession, { type: "turn/end", data: { turn: 1 } });
+    assert.match(await waitForMatch(tailMarker, /ID:/), /ID:/);
   });
 
   it("auto-sync ignores skill catalogs and agent instructions", async () => {
@@ -303,5 +367,36 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
     await handler(session, { type: "turn/end", data: { turn: 1 } });
     const out = await run("recall", [marker, "5"]);
     assert.doesNotMatch(out, /ID:/);
+  });
+
+  it("periodic auto-sleep uses the config.yaml threshold and skips a cleared one", async () => {
+    // Behavioural pinning of resolveSleepThreshold() against a real CLI: the
+    // cleared-threshold case is fully covered in the unit suite ("" / 0 / -3 /
+    // "abc" all resolve to the 50 default). Here we only prove the periodic
+    // 10-turn check reads the YAML value and that a huge threshold stays quiet.
+    writeMnemosyneConfigYaml(dataDir, { sleep_threshold: 100000, auto_sleep_enabled: true });
+    try {
+      const { ctx, sessionEvents } = createMockCtx();
+      apply(ctx, { cli: CLI, dataDir, autoSync: true, sessionScope: false });
+      const handler = sessionEvents[0];
+      const session = { id: "session-it-threshold", header: { createdAt: 13 } };
+      const marker = "threshold-huge-3f88";
+      await handler(session, {
+        type: "user/message",
+        data: { role: "user", content: [{ type: "text", text: marker + " preference" }], source: { kind: "user" } },
+      });
+      await handler(session, { type: "turn/end", data: { turn: 1 } });
+      assert.match(await waitForMatch(marker, /ID:/), /ID:/);
+      const before = await countConsolidations(dataDir);
+      for (let turn = 2; turn <= 10; turn++) {
+        await handler(session, { type: "turn/end", data: { turn } });
+      }
+      await new Promise((r) => setTimeout(r, 800));
+      assert.equal(await countConsolidations(dataDir), before, "huge threshold must keep the periodic check quiet");
+      const stillThere = await run("recall", [marker, "5"]);
+      assert.match(stillThere, /ID:/, "the row must remain in working memory");
+    } finally {
+      writeMnemosyneConfigYaml(dataDir, { sleep_threshold: 50 });
+    }
   });
 });

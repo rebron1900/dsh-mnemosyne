@@ -11,6 +11,10 @@ import { join } from "node:path";
 
 import {
   apply,
+  AUTO_MEMORY_DEFAULTS,
+  SYNC_TURN_USER_LIMIT_DEFAULT,
+  SYNC_TURN_ASSISTANT_LIMIT_DEFAULT,
+  truncateSyncTurnContent,
   buildEnv,
   DEFAULT_DATA_DIR,
   recallArgs,
@@ -28,6 +32,8 @@ import {
   startReindex,
   getReindexStatus,
   formatPrefetchContext,
+  parseRecallRows,
+  selectPrefetchRows,
   parseSettingsAutoSection,
   resolvePythonInterp,
   deriveSessionSid,
@@ -36,12 +42,13 @@ import {
   MASKED_SECRET,
   DEFAULT_TO_GLOBAL_SQL,
   SCOPED_TO_DEFAULT_SQL,
-  isInjectedMessageSource,
   parseSyncRoles,
   resolveActiveBank,
   resolveBankDbPath,
   validateReindexModel,
   countConsolidations,
+  resolveSleepThreshold,
+  shouldRunSessionEndSleep,
 } from "../src/index.js";
 
 // Unit tests must not read the developer's real ~/.dsh/settings.yaml
@@ -169,7 +176,7 @@ describe("session scoping helpers", () => {
     assert.match(SESSION_HELPER, /_cross_session=False/);
     assert.match(SESSION_HELPER, /scope=scope/);
     assert.doesNotMatch(SESSION_HELPER, /BeamMemory/);
-    for (const verb of ["store", "recall", "delete", "sleep"]) {
+    for (const verb of ["store", "recall", "recall-json", "delete", "sleep"]) {
       assert.ok(SESSION_HELPER.includes(`verb == "${verb}"`), `helper covers verb ${verb}`);
     }
   });
@@ -679,7 +686,7 @@ describe("panel HTTP routes", () => {
     const res = await callRoute(handler, jsonReq("GET"));
     assert.equal(res.status, 200);
     assert.equal(res.body.config.embedding_dim, 384);
-    assert.equal(res.body.config.sleep_threshold, 20);
+    assert.equal(res.body.config.sleep_threshold, 50);
   });
 
   it("GET returns only the panel allowlist and masks known secrets", async () => {
@@ -742,11 +749,17 @@ describe("panel HTTP routes", () => {
 });
 
 describe("automatic memory config defaults", () => {
-  it("all automatic features default to false (manual-only)", () => {
-    const env = buildEnv({}, {});
-    // buildEnv does not add MNEMOSYNE_* env for these — they're DSH-side config
-    // The point is they should be absent when unset, meaning disabled
-    assert.equal(env.MNEMOSYNE_DATA_DIR, DEFAULT_DATA_DIR);
+  it("uses canonical Hermes defaults for omitted automatic settings", () => {
+    assert.deepEqual(AUTO_MEMORY_DEFAULTS, {
+      promptSection: true,
+      autoSync: true,
+      syncTurnUserLimit: 500,
+      syncTurnAssistantLimit: 800,
+      autoPrefetch: true,
+      prefetchTopK: 5,
+      prefetchMinQueryLen: 1,
+      sessionScope: true,
+    });
   });
 
   it("registers the systemPrompt section once with dynamic text (empty when promptSection is false)", () => {
@@ -788,17 +801,81 @@ describe("automatic memory config defaults", () => {
     apply(ctx, {});
     assert.ok(sessionEvents.length >= 1);
   });
+
+  it("resolveSleepThreshold never returns 0 for a cleared or disabled field", () => {
+    // A cleared panel field round-trips as "" — it must fall back to the
+    // upstream default 50, not Number("") === 0 (which would fire every check).
+    assert.equal(resolveSleepThreshold({ sleep_threshold: "" }), 50);
+    assert.equal(resolveSleepThreshold({ sleep_threshold: 0 }), 50);
+    assert.equal(resolveSleepThreshold({ sleep_threshold: -3 }), 50);
+    assert.equal(resolveSleepThreshold({ sleep_threshold: "abc" }), 50);
+    assert.equal(resolveSleepThreshold({ sleep_threshold: undefined }), 50);
+    assert.equal(resolveSleepThreshold({}), 50);
+    assert.equal(resolveSleepThreshold({ sleep_threshold: 25 }), 25);
+    assert.equal(resolveSleepThreshold({ sleep_threshold: "75" }), 75);
+    // Disabled auto sleep short-circuits regardless of the threshold.
+    assert.equal(resolveSleepThreshold({ auto_sleep_enabled: false, sleep_threshold: 25 }), null);
+    assert.equal(resolveSleepThreshold({ auto_sleep_enabled: "false" }), null);
+    assert.equal(resolveSleepThreshold({ auto_sleep_enabled: true, sleep_threshold: 30 }), 30);
+  });
+
+  it("shouldRunSessionEndSleep skips sessions that never stored an auto memory", () => {
+    const tracker = new WeakSet();
+    const idle = { id: "session-idle" };
+    const active = { id: "session-active" };
+    assert.equal(shouldRunSessionEndSleep(tracker, idle), false, "idle session must not force a sleep");
+    tracker.add(active);
+    assert.equal(shouldRunSessionEndSleep(tracker, active), true);
+    // Unknown session identity keeps the legacy forced-sleep behaviour.
+    assert.equal(shouldRunSessionEndSleep(tracker, null), true);
+    assert.equal(shouldRunSessionEndSleep(tracker, "session-x"), true);
+  });
+
+  it("registers the systemPrompt section when the service arrives late", () => {
+    const { ctx, systemPromptSections } = createMockCtx();
+    let systemPromptReady = null;
+    ctx.inject = (deps, fn) => {
+      if (deps[0] === "systemPrompt") { systemPromptReady = fn; return; }
+      if (deps[0] === "tools") {
+        fn({ effect: (fn) => fn(), tools: { register: () => () => {} } });
+      } else if (deps[0] === "webServer") {
+        fn({ webServer: { register: () => () => {} }, effect: (fn) => fn() });
+      } else if (deps[0] === "settings") {
+        fn({ settings: { register: () => ({}) }, effect: (fn) => fn() });
+      } else if (deps[0] === "agents") {
+        fn({ effect: (fn) => fn() });
+      }
+    };
+    apply(ctx, { promptSection: true });
+    assert.equal(systemPromptSections.length, 0, "no section before the service appears");
+    assert.equal(typeof systemPromptReady, "function");
+    systemPromptReady({
+      systemPrompt: { section: (s) => { systemPromptSections.push(s); return () => {}; } },
+      effect: (fn) => fn(),
+    });
+    assert.equal(systemPromptSections.length, 1);
+    assert.equal(systemPromptSections[0].name, "mnemosyne-memory");
+    assert.ok(systemPromptSections[0].text().includes("Mnemosyne Memory"));
+  });
+});
+
+describe("Hermes-compatible sync turn limits", () => {
+  it("uses the canonical 500/800 character defaults", () => {
+    assert.equal(SYNC_TURN_USER_LIMIT_DEFAULT, 500);
+    assert.equal(SYNC_TURN_ASSISTANT_LIMIT_DEFAULT, 800);
+  });
+
+  it("keeps a Unicode-safe prefix for positive limits", () => {
+    assert.equal(truncateSyncTurnContent("ab😀cd", 3, 500), "ab😀");
+  });
+
+  it("uses zero to disable truncation and falls back on invalid values", () => {
+    assert.equal(truncateSyncTurnContent("complete text", 0, 500), "complete text");
+    assert.equal(truncateSyncTurnContent("abcdef", "invalid", 3), "abc");
+  });
 });
 
 describe("auto-memory source and role guards", () => {
-  it("recognizes every harness-injected context source", () => {
-    for (const kind of ["plugin", "agent-instructions", "skill-catalog"]) {
-      assert.equal(isInjectedMessageSource({ kind }), true);
-    }
-    assert.equal(isInjectedMessageSource({ kind: "user" }), false);
-    assert.equal(isInjectedMessageSource(null), false);
-  });
-
   it("defaults automatic sync to real user messages only", () => {
     assert.deepEqual([...parseSyncRoles(undefined)], ["user"]);
     assert.deepEqual([...parseSyncRoles("user, assistant,unknown")].sort(), ["assistant", "user"]);
@@ -935,6 +1012,31 @@ describe("formatPrefetchContext", () => {
   });
 });
 
+describe("Hermes-inspired prefetch filtering", () => {
+  it("parses structured and CLI recall rows", () => {
+    assert.deepEqual(parseRecallRows('[{"content":"pnpm","score":0.8}]')[0].content, "pnpm");
+    assert.equal(parseRecallRows(["ID: abc", "Content: pnpm", "Score: 0.8"].join("\n"))[0].id, "abc");
+  });
+
+  it("drops assistant, importance-only, and generic single-token noise", () => {
+    const rows = selectPrefetchRows([
+      { content: "[ASSISTANT] ignore this", score: 1, importance: 1, source: "conversation" },
+      { content: "unrelated high importance", score: 0.9, importance: 1, source: "fact" },
+      { content: "the answer is pnpm", score: 0.2, importance: 0.9, source: "conversation", keyword_score: 0 },
+    ], "what package manager does the project use", 5);
+    assert.equal(rows.length, 0);
+  });
+
+  it("keeps distinctive multi-token matches and removes semantic duplicates", () => {
+    const rows = selectPrefetchRows([
+      { content: "Project uses pnpm and ESM modules", score: 0.8, importance: 0.8, source: "fact", keyword_score: 0.6 },
+      { content: "The project uses pnpm and ESM modules.", score: 0.7, importance: 0.5, source: "conversation", keyword_score: 0.5 },
+      { content: "CJK 项目使用 pnpm", score: 0.7, importance: 0.8, source: "fact", keyword_score: 0.4 },
+    ], "project uses pnpm ESM", 5);
+    assert.equal(rows.length, 2);
+    assert.match(rows[0].content, /pnpm/);
+  });
+});
 describe("auto-sync session/event handler", () => {
   it("does not crash on plugin-sourced user/message (feedback loop prevention)", async () => {
     const { ctx, sessionEvents } = createMockCtx();
@@ -1020,6 +1122,8 @@ describe("parseSettingsAutoSection", () => {
       "mnemosyne:",
       "  promptSection: true",
       "  autoSync: true",
+      "  syncTurnUserLimit: 0",
+      "  syncTurnAssistantLimit: 1600",
       "  autoPrefetch: true",
       "  prefetchMinQueryLen: 6",
       "search-pool:",
@@ -1028,6 +1132,8 @@ describe("parseSettingsAutoSection", () => {
     assert.deepEqual(out, {
       promptSection: true,
       autoSync: true,
+      syncTurnUserLimit: 0,
+      syncTurnAssistantLimit: 1600,
       autoPrefetch: true,
       prefetchMinQueryLen: 6,
     });
