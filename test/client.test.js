@@ -87,6 +87,13 @@ describe("client module", () => {
     assert.equal(typeof slot.render, "function");
   });
 
+  it("declares Hermes-compatible sync length controls", () => {
+    assert.match(clientSrc, /key: "syncTurnUserLimit"/);
+    assert.match(clientSrc, /key: "syncTurnAssistantLimit"/);
+    assert.match(clientSrc, /syncTurnUserLimit: 500/);
+    assert.match(clientSrc, /syncTurnAssistantLimit: 800/);
+  });
+
   it("the registered section renders a React element tree", () => {
     let slot = null;
     const ctx = {
