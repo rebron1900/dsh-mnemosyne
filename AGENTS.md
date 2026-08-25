@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-- **描述**：DeepSeek Harness（DSH）的 Mnemosyne 记忆插件 — Profile Bundle 形态，注册 5 个记忆工具与 1 个内嵌技能，提供 Settings 独立面板（CLI 状态/统计/一键安装/测试/配置/恢复默认），数据落 `~/.dsh/mnemosyne`，CLI 通过 `uv tool install` 自动安装。支持可选的自动记忆增强（system prompt 声明段、自动对话存储、自动召回注入），默认全部关闭。移植自 `mnemosyne-oss/Pi-mnemosyne`。
+- **描述**：DeepSeek Harness（DSH）的 Mnemosyne 记忆插件 — Profile Bundle 形态，注册 5 个记忆工具与 1 个内嵌技能，提供 Settings 独立面板（CLI 状态/统计/一键安装/测试/配置/恢复默认），数据落 `~/.dsh/mnemosyne`，CLI 通过 `uv tool install` 自动安装。自动记忆增强（system prompt 声明段、自动对话存储、自动召回注入、sessionScope 会话隔离）默认对齐 Hermes 集成开启，可在面板逐项关闭。移植自 `mnemosyne-oss/Pi-mnemosyne`。
 - **技术栈**：纯 ESM JavaScript + JSDoc；host 端用 `@deepseek-ai/dsh-tools`/`dsh-settings`/`schemastery`，client 端用 `window.__ModuleLoader__.load` 格式 + `React.createElement`（无构建链）。
 - **运行时**：Node.js ≥ 20（DSH 宿主进程内运行）
 - **仓库地址**：本地项目，暂未建远端
@@ -46,9 +46,9 @@ dsh-mnemosyne/
 
 - 测试框架：node:test（stdlib，零额外依赖）
 - 执行命令：`pnpm test`
-- 单元层 `test/index.test.js`（50 例，无需 CLI）：参数组装、5 个工具注册契约、skill 注册、render 输出、manifest（dsh.bundle 与 patch 行）、CLI 缺失/非零退出路径、`buildEnv` 只注入显式字段且总钉 dataDir、config.yaml 读写、面板 HTTP 路由、自动记忆配置默认值与条件注册、`extractMessageText`/`extractLastUserText`/`formatPrefetchContext` 辅助函数、auto-sync session/event handler 反馈循环防护与错误恢复
-- 集成层 `test/integration.test.js`（9 例，需真实 `mnemosyne` CLI，否则自动 skip）：对照主仓库 `tests/test_cli_*.py` 契约，用 `MNEMOSYNE_DATA_DIR`+`MNEMOSYNE_NO_EMBEDDINGS=1` 隔离临时库，跑 remember/recall/forget/stats/sleep 全链路 + 端到端闭环 + apply() 的 execute() 闭包直驱真实 CLI
-- 客户端层 `test/client.test.js`（3 例）：stub `window.__ModuleLoader__` + mock react，验证 client 模块导出 apply/name/inject、apply 注册 locale 字典与 `settings.section` slot（id=mnemosyne, order=50）、render 返回面板组件元素
+- 单元层 `test/index.test.js`（96 例，无需 CLI）：参数组装、5 个工具注册契约、skill 注册、render 输出、manifest（dsh.bundle 与 patch 行）、CLI 缺失/非零退出路径、`buildEnv` 只注入显式字段且总钉 dataDir、config.yaml 读写、面板 HTTP 路由、自动记忆配置默认值与条件注册、`extractMessageText`/`extractLastUserText`/`formatPrefetchContext` 辅助函数、auto-sync session/event handler 反馈循环防护与错误恢复、`resolveSleepThreshold`/`shouldRunSessionEndSleep` sleep 决策契约、deferred systemPrompt 注入
+- 集成层 `test/integration.test.js`（17 例，需真实 `mnemosyne` CLI，否则自动 skip）：对照主仓库 `tests/test_cli_*.py` 契约，用 `MNEMOSYNE_DATA_DIR`+`MNEMOSYNE_NO_EMBEDDINGS=1` 隔离临时库，跑 remember/recall/forget/stats/sleep 全链路 + 端到端闭环 + apply() 的 execute() 闭包直驱真实 CLI + sessionScope 分区 + 周期 auto-sleep 阈值静默
+- 客户端层 `test/client.test.js`（4 例）：stub `window.__ModuleLoader__` + mock react，验证 client 模块导出 apply/name/inject、apply 注册 locale 字典与 `settings.section` slot（id=mnemosyne, order=50）、render 返回面板组件元素、Hermes 同步长度控件
 - 配置行为：setup/diagnose 会补齐面板管理的 mnemosyne 默认值；面板从扁平 `config.yaml` 读取实际值，空值以 placeholder 显示默认值；保存后执行 config reload，支持恢复默认配置
 - 面板行为：状态卡和插件卡默认展开，其余配置卡默认折叠；测试连接成功后立即重新执行 diagnose 并刷新 stats
 - CLI 契约实测：`store`→`Stored: <16hex>`；`recall` 命中含 `ID:/Content:/Score:`、未命中仅 `Results for:`；`delete` 有效→`Deleted:`、缺失→reject `Memory not found`；`stats`→计数行；`sleep`→`Consolidation complete`
@@ -63,7 +63,7 @@ dsh-mnemosyne/
 # 安装依赖
 pnpm install
 
-# 测试（62 例：单元 + 集成 + client）
+# 测试（117 例：96 单元 + 17 集成 + 4 client）
 pnpm test
 
 # 安装进 web profile（面板 Setup 按钮自动装 CLI，或手动 uv tool install mnemosyne-memory）

@@ -31,10 +31,10 @@ Mnemosyne 支持 MCP、Python SDK 及多种 agent 框架（Claude Code、Cursor�
 - **数据隔离**：SQLite 库与 `config.yaml` 存于 `~/.dsh/mnemosyne`，不碰 `~/.hermes`
 - **配置同步**：面板从扁平的 `config.yaml` 读取 mnemosyne 实际配置，空值字段显示默认值 placeholder；保存后自动执行 `mnemosyne config reload`
 - **默认值恢复**：面板底部支持将面板管理的配置恢复为 mnemosyne 默认值
-- **自动整理**：每次 `turn/end` 检查工作记忆数量，达到阈值时自动执行 `mnemosyne sleep`
-- **自动记忆（可选开启）**：可选功能自动化记忆操作——全部默认关闭，保持手动调用行为不变：
+- **自动整理**：后台按 session 串行处理同步；每 10 个 durable turn 检查工作记忆数量，达到阈值时自动执行当前会话的 `mnemosyne sleep`。清空的 `sleep_threshold` 回退到上游默认 50（绝不会被当成 0 而每轮必睡）；`session/disposed` 只在该会话确实写入过自动记忆时才执行收尾整合——空闲会话不会触发可能调用 LLM 的 sleep
+- **自动记忆（默认启用）**：对齐 Mnemosyne 当前 Hermes 集成；可在设置中分别关闭自动记忆能力，显式设置为 `false` 的旧配置保持不变：
   - **Prompt 声明段** — 在 system prompt 注入 `# Mnemosyne Memory` 头部，让模型知道记忆工具可用
-  - **自动存储对话** — 每轮对话后自动将**真实 user 消息**（不含 assistant 输出）存入 Mnemosyne，无需模型主动调用 `mnemosyne_remember`；注入型上下文消息永不入库——`plugin`（如本插件自己的 prefetch 注入）、`agent-instructions`（workspace 指令）、`skill-catalog`（可用技能目录提醒）
+  - **自动存储对话** — 每轮对话后自动将**真实 user 消息**（不含 assistant 输出）存入 Mnemosyne，无需模型主动调用 `mnemosyne_remember`；注入型上下文消息永不入库——`plugin`（如本插件自己的 prefetch 注入）、`agent-instructions`（workspace 指令）、`skill-catalog`（可用技能目录提醒）。兼容 Hermes 的长度上限默认是 user 500 字、assistant 800 字；对应上限设为 `0` 时完整保存，不做截断
   - **自动召回注入** — 每个模型步骤前自动 recall 相关记忆并注入对话流，模型无需调用 `mnemosyne_recall` 即可看到先验上下文
   - **会话隔离** — 按 DSH 会话分区记忆（引擎 `session_id` 列）：每个会话只召回自己的记录 + `global` 作用域的行。子代理与其根会话共享记忆。会话 id 由持久化的 session header（`createdAt`）派生，恢复的会话跨 DSH 重启记忆不丢。`global` 行对所有会话**可读可写**（任何会话也能删除）。面板提供一键把历史 `default` 会话记忆迁移到 `global` 的操作；上游 `cross_session` 召回开关不受支持
 
@@ -74,11 +74,11 @@ dsh plugin --profile web add ./dsh-mnemosyne
 | 召回 | `polyphonicRecall` | config.yaml `polyphonic_recall` |
 | 工作记忆 | `wmMaxItems` / `wmTtlHours` | config.yaml `wm_*` |
 | 工作记忆 | `autoSleep` / `sleepThreshold` / `ignorePatterns` / `syncRoles` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` / `sync_roles` |
-| 自动记忆 | `promptSection` / `autoSync` / `autoPrefetch` / `sessionScope` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
+| 自动记忆 | `promptSection` / `autoSync` / `syncTurnUserLimit` / `syncTurnAssistantLimit` / `autoPrefetch` / `sessionScope` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
 
 > **注意**：自动记忆字段是 DSH 侧配置（通过设置面板保存，不写入 `config.yaml`）。它们通过设置监听器在运行时生效，无需重启 DSH。
 
-> **会话隔离注意事项**：开启 `sessionScope` 会让已有记忆不可见——它们位于历史 `default` 会话中，而会话级召回只看到当前会话 + `global` 行。请先用面板「自动记忆」卡片中的“迁移 default 会话记忆到 global”按钮迁移。反向按钮「将 session-scoped 记忆迁回 default」会有意把 `dsh_*` 行合并进共享历史命名空间，并丢失原会话归属。`global` 行对所有会话可见**且可删除**；插件会强制关闭上游 `cross_session` 召回逃生开关。config 面板只返回它管理的字段（允许列表），密钥类值一律掩码（`***`），真实值不会回传给浏览器。
+> **会话隔离注意事项**：`sessionScope` 默认开启；已有记忆位于历史 `default` 会话时，会话级召回只看到当前会话 + `global` 行。升级后请用面板「自动记忆」卡片中的“迁移 default 会话记忆到 global”按钮迁移。反向按钮「将 session-scoped 记忆迁回 default」会有意把 `dsh_*` 行合并进共享历史命名空间，并丢失原会话归属。`global` 行对所有会话可见**且可删除**；插件会强制关闭上游 `cross_session` 召回逃生开关。config 面板只返回它管理的字段（允许列表），密钥类值一律掩码（`***`），真实值不会回传给浏览器。
 
 面板保存会写入对应配置文件，并执行 `mnemosyne config reload`。底部"恢复默认配置"会将面板管理的配置恢复为 mnemosyne 默认值；更多未展示的配置可以直接编辑 `~/.dsh/mnemosyne/config.yaml`。除 `vec_type` 等启动时确定的配置外，大部分配置支持热加载。
 
@@ -119,7 +119,7 @@ dsh plugin --profile web add ./dsh-mnemosyne
 
 ```bash
 pnpm install
-pnpm test        # node --test（99 例：81 单元 + 15 集成 + 3 client）
+pnpm test        # node --test（117 例：96 单元 + 17 集成 + 4 client）
 ```
 
 ## License

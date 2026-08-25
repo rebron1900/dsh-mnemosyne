@@ -157,9 +157,9 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ## 8. 测试策略
 
-测试分三层，均用 `node:test`（stdlib，零额外依赖），`pnpm test` 一并执行（当前共 99 例：81 单元 + 15 集成 + 3 client）。
+测试分三层，均用 `node:test`（stdlib，零额外依赖），`pnpm test` 一并执行（当前共 117 例：96 单元 + 17 集成 + 4 client）。
 
-### 8.1 单元测试 `test/index.test.js`（81 例，无需 mnemosyne CLI）
+### 8.1 单元测试 `test/index.test.js`（96 例，无需 mnemosyne CLI）
 
 1. `storeArgs` / `recallArgs` 位置参数组装（含可选参数缺省）；
 2. mock ctx 上 `apply()` 恰好注册 5 个预期工具，且每个都有 execute / output.schema / render；
@@ -168,7 +168,7 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 5. CLI 缺失 → 提示 `pip install mnemosyne-memory`；非零退出 → reject；
 6. manifest 契约：`dsh.bundle.patch` 指向存在的 patch 文件，patch 含 insert 行。
 
-### 8.2 集成测试 `test/integration.test.js`（15 例，需真实 `mnemosyne` CLI）
+### 8.2 集成测试 `test/integration.test.js`（17 例，需真实 `mnemosyne` CLI）
 
 对照 mnemosyne 主仓库 `tests/test_cli_*.py` 的行为契约，对着真实 CLI 跑插件自己的代码路径（`runMnemosyne` + `storeArgs`/`recallArgs` + `apply()` 注册的 `execute()` 闭包）。`resolveCli()` 找不到 `mnemosyne` 时整组自动 skip。
 
@@ -190,7 +190,7 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 集成验证（需真实宿主）按 §7 手工执行一次。
 
-### 8.3 客户端测试 `test/client.test.js`（3 例）
+### 8.3 客户端测试 `test/client.test.js`（4 例）
 
 使用 `window.__ModuleLoader__` 与 React mock 验证客户端模块导出、locale 注册、独立 `settings.section` slot、卡片渲染结构和客户端插件契约。
 
@@ -265,22 +265,24 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ### 10.6 会话收尾自动 sleep
 
-`apply` 通过 `ctx.on("session/event", ...)` 监听 `turn/end` 事件。当 `config.yaml` 的 `auto_sleep_enabled` 为 true 且工作记忆条目数 ≥ `sleep_threshold` 时，自动调用 `mnemosyne sleep` 整合记忆。读取 config.yaml（而非 DSH settings）作为事实源，使面板编辑即时生效无需重启。失败静默跳过，不干扰会话。
+`turn/end` 只把自动同步和周期 consolidation 排入按 session 串行的后台队列，不阻塞事件生产；每 10 个 durable turn 检查一次，`config.yaml` 的 `auto_sleep_enabled` 为 true 且工作记忆条目数 ≥ `sleep_threshold`（默认 50）时执行当前 session 的 `mnemosyne sleep`。阈值键被清空（`""`）或写成 0 / 负数时回退到默认 50，绝不按 `Number("")===0` 解释成「每轮必睡」。`session/disposed` 只在该会话本次生命周期内确实写入过自动记忆（`shouldRunSessionEndSleep`，WeakSet 按 session 对象跟踪）时才在排空同步后强制执行收尾 consolidation；空闲 session 不会触发可能调用 LLM 的 sleep。两个迁移路由（default→global、scoped→default）与工具写入共用同一把按 dataDir+bank 串行的 `withMemoryLock`，不会与 remember/forget/sleep/auto-sync 并发改写同一 SQLite 库。
 
 ## 11. 自动记忆增强（v0.3）
 
-对标 mnemosyne 主仓库 `hermes_memory_provider` 的三层自动化能力（system prompt 注入、pre-turn prefetch、post-turn sync），在保持 CLI 代理架构的前提下，利用 DSH 的 `agent/pre-step` waterfall 与 `session/event` 事件实现等价功能。**三项功能全部默认关闭**，保持当前手动调用行为不变。
+对标 mnemosyne 主仓库当前 canonical Hermes 集成的三层自动化能力（system prompt 注入、pre-turn prefetch、post-turn sync），在保持 DSH CLI/venv 适配边界的前提下，利用 DSH 的 `agent/pre-step` waterfall 与 `session/event` / `session/disposed` 生命周期实现等价功能。**三项功能默认开启**，显式设置为 false 的既有用户配置仍优先。
 
 ### 11.1 配置项
 
 | Config 字段 | 默认 | 作用 |
 |---|---|---|
-| `promptSection` | `false` | 在 system prompt 注入 `# Mnemosyne Memory` 声明段 |
-| `autoSync` | `false` | 每轮对话后自动将**真实 user 消息**存入 Mnemosyne（默认不同步 assistant 输出；注入型上下文——`plugin` / `agent-instructions` / `skill-catalog`——永不入库） |
-| `autoPrefetch` | `false` | 每个模型步骤前自动 recall 相关记忆并注入对话流 |
-| `prefetchTopK` | `5` | 自动召回注入时返回的记忆条数 |
-| `prefetchMinQueryLen` | `3` | 用户消息短于此长度时跳过自动召回 |
-| `sessionScope` | `false` | 按 DSH 会话分区记忆（session_id 列）：每会话只召回自己的记录 + global 行 |
+| `promptSection` | `true` | 在 system prompt 注入 `# Mnemosyne Memory` 声明段 |
+| `autoSync` | `true` | 每轮对话后自动将**真实 user 消息**存入 Mnemosyne（默认不同步 assistant 输出；注入型上下文——`plugin` / `agent-instructions` / `skill-catalog`——永不入库） |
+| `syncTurnUserLimit` | `500` | user 自动同步字符上限；`0` 表示不截断，对齐 `MNEMOSYNE_SYNC_TURN_USER_LIMIT` 语义 |
+| `syncTurnAssistantLimit` | `800` | assistant 自动同步字符上限；`0` 表示不截断，对齐 `MNEMOSYNE_SYNC_TURN_ASSISTANT_LIMIT` 语义 |
+| `autoPrefetch` | `true` | 每个模型步骤前自动 recall、过滤并注入不可信记忆上下文 |
+| `prefetchTopK` | `5` | 自动召回注入时最多保留的记忆条数 |
+| `prefetchMinQueryLen` | `1` | DSH 兼容阈值；Hermes 的 trivial prompt gate 由宿主负责 |
+| `sessionScope` | `true` | 按 DSH 会话分区记忆（session_id 列）：每会话只召回自己的记录 + global 行；旧 default 行需迁移到 global 才能继续可见 |
 
 ### 11.2 systemPrompt.section — 静态声明段
 
@@ -294,8 +296,9 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 - 只处理 `source.kind === 'user'` 的 `user/message` 事件（每轮一次，不做逐 step 同步）
 - 注入型上下文一律跳过：`plugin`（含本插件自己的 prefetch 注入）、`agent-instructions`、`skill-catalog`——与 `extractLastUserText()` 的注入来源名单保持一致，防止 system-reminder / AGENTS.md / 技能目录进入记忆并形成召回反馈循环
-- 提取 text content（截断 500 字），`mnemosyne store <text> conversation 0.5`
-- assistant 消息默认不自动存储（对齐上游 `sync_roles` 默认仅 `user` 的语义）
+- `user/message` 采集完整 text content；在 `turn/end` 对配置做当轮快照后，按 `syncTurnUserLimit` 截断并执行 `mnemosyne store <text> conversation 0.5`
+- assistant 消息默认不自动存储；`sync_roles` 包含 assistant 时，同样按当轮 `syncTurnAssistantLimit` 快照截断后写入
+- 两个 limit 均使用 Unicode code point 计数；正数保留前缀，`0` 不截断，与 canonical Hermes 的环境变量语义一致。完整保存模式不自动分块或摘要
 
 `extractMessageText()` 从消息 content blocks（`[{type:"text",text}]` 数组）中提取纯文本。失败静默跳过。
 
@@ -322,20 +325,21 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ### 11.6 面板
 
-新增 `groupAuto`（自动记忆）配置组，包含 6 个字段：`promptSection`（toggle）、`autoSync`（toggle）、`autoPrefetch`（toggle）、`sessionScope`（toggle）、`prefetchTopK`（number）、`prefetchMinQueryLen`（number）。这些字段是 DSH 侧配置（不写入 config.yaml，不走 buildEnv），由 DSH settings 管理。组内 `sessionScope` 字段下方常驻"迁移 default 会话记忆到 global"按钮（见 §12.1）。
+新增 `groupAuto`（自动记忆）配置组，包含 8 个字段：`promptSection`（toggle）、`autoSync`（toggle）、`syncTurnUserLimit`（number）、`syncTurnAssistantLimit`（number）、`autoPrefetch`（toggle）、`sessionScope`（toggle）、`prefetchTopK`（number）、`prefetchMinQueryLen`（number）。这些字段是 DSH 侧配置（不写入 config.yaml，不走 buildEnv），由 DSH settings 管理并在 turn 边界快照。组内 `sessionScope` 字段下方常驻“迁移 default 会话记忆到 global”按钮（见 §12.1）。
 
 ### 11.7 测试
 
-新增自动记忆与会话隔离相关用例（当前总计 99 例 = 81 单元 + 15 集成 + 3 client）：
-- 自动记忆配置默认值（6 例）：验证三项功能默认关闭、systemPrompt.section 条件注册、agent/pre-step 条件注册
+自动记忆与会话隔离测试覆盖：
+- 自动记忆配置默认值（6 例）：验证 Hermes 风格默认开启、systemPrompt.section 条件注册、agent/pre-step 条件注册
 - `extractMessageText`（5 例）：从 content blocks 数组提取文本
 - `extractLastUserText`（3 例）：从 messages 数组提取最后一条 user 消息
 - `formatPrefetchContext`（3 例）：格式化 recall 输出为 prompt 注入文本
-- 原有用例保持通过（累计 99 例）
+- sync turn limit：验证 Hermes 500/800 默认值、`0` 不截断、Unicode 安全截断及真实 CLI 尾部内容写入
+- 其余参数、作用域、迁移和 CLI 契约用例保持通过
 
 ## 12. 会话隔离（sessionScope，v0.4）
 
-CLI 的 store/recall 没有会话参数，所有路径都落在默认 `session_id='default'`（CLI `_resolve_default_scope()` 默认 `session` 作用域）。为使每个 DSH 会话拥有独立记忆，新增 `sessionScope`（默认 false，开启后隔离生效）。
+CLI 的 store/recall 没有会话参数，所有路径都落在默认 `session_id='default'`。为对齐 Hermes Provider 的 session-scoped 默认语义，新增 `sessionScope`（默认 true，开启后隔离生效）。显式关闭仍可恢复 legacy shared-default 行为；升级已有安装时应先迁移 default 行到 global，避免历史记忆暂时不可见。
 
 ### 12.1 session_id 派生与迁移
 
@@ -355,13 +359,13 @@ CLI 无会话参数，因此 `SESSION_HELPER`（`mnemosyne_session_helper.py`，
 
 ### 12.3 整合路径
 
-- `mnemosyne_sleep` 仍显式整合全部会话；自动 sleep 在 sessionScope 下只整合触发它的当前会话，避免后台任务改变其他 profile 的活跃上下文。
+- `mnemosyne_sleep` 在 sessionScope 下默认只整合当前 session；需要全库整合时使用显式的面板/CLI 入口。自动 sleep 只整合触发它的当前会话，避免后台任务改变其他 profile 的活跃上下文。
 - `mnemosyne_stats` 与面板统计为全库计数，不按会话区分（工具语义如此，属预期）。
 
 ### 12.4 依赖与边界
 
 - 会话路径依赖 CLI shebang 解析出的 python；绝对解释器与 `#!/usr/bin/env python3` 形式都支持。
-- 开启前旧记忆不可见——面板 hint 与 README 均提示先迁移。
+- 升级后 legacy `default` 记忆在 sessionScope 默认开启时不可见——面板 hint 与 README 均提示迁移到 global；显式关闭 sessionScope 的旧配置不受影响。
 - **global 是所有会话的共享命名空间，可读可写**：任何会话都能 recall 到 global 行，也能 delete 它们（engine 的 forget SQL 是 `session_id = ? OR scope = 'global'`）。这是上游语义，插件不额外做删除保护；需要只读公共记忆时别用 global。
 - **`cross_session` 被会话 helper 强制关闭**：上游 config.yaml 的该键不会扩大 sessionScope 的 recall 范围。
 
