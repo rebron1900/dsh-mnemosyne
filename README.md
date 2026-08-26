@@ -27,6 +27,7 @@ This plugin is ported from [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mn
 - **Five native tools**: `mnemosyne_remember` / `mnemosyne_recall` / `mnemosyne_forget` / `mnemosyne_stats` / `mnemosyne_sleep`
 - **Embedded skill**: The `mnemosyne` skill auto-registers with the plugin, guiding agents on when to store/retrieve memories
 - **Settings panel**: A dedicated "Mnemosyne" entry in DSH Settings with CLI status, memory stats, one-click install/test, and a config form
+- **Read-only memory dashboard**: Opens from the Mnemosyne Settings panel through the optional Better Sidebar integration, showing the active bank's overview, memories, triples, consolidation history, search, and detail views without mutation controls
 - **Auto-install CLI**: The panel's Setup button runs `uv tool install mnemosyne-memory` and fills `config.yaml` defaults
 - **Data isolation**: SQLite DB and `config.yaml` live under `~/.dsh/mnemosyne`, never touching `~/.hermes`
 - **Config sync**: The panel reads actual values from the flat `config.yaml`; empty fields show default placeholders; saving triggers `mnemosyne config reload`
@@ -119,7 +120,7 @@ See [docs/design.md](docs/design.md).
 
 ```bash
 pnpm install
-pnpm test        # node --test (117 tests: 96 unit + 17 integration + 4 client)
+pnpm test        # node --test (124 tests: 103 unit + 17 integration + 4 client)
 ```
 
 ## License

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { accessSync, constants, mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, unlinkSync, statSync } from "node:fs";
-import { join, resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -736,6 +737,767 @@ export function parseStats(stats) {
   };
 }
 
+const DASHBOARD_MAX_PAGE_SIZE = 100;
+const DASHBOARD_DEFAULT_PAGE_SIZE = 30;
+const DASHBOARD_MAX_OFFSET = 10_000;
+const DASHBOARD_MAX_QUERY_LENGTH = 160;
+const DASHBOARD_MAX_FILTER_LENGTH = 160;
+const DASHBOARD_VERACITY_FILTERS = new Set(["stated", "inferred", "tool", "imported", "unknown"]);
+const DASHBOARD_DEGRADATION_FILTERS = new Set(["1", "2", "3"]);
+const DASHBOARD_STATUS_FILTERS = new Set(["active", "all", "expired", "superseded"]);
+const DASHBOARD_SORTS = new Set(["recent", "oldest", "importance", "recall"]);
+
+/** Clamp the public dashboard list parameters before they reach Python. */
+export function parseDashboardListParams(url) {
+  const params = new URL(url ?? "/", "http://localhost").searchParams;
+  const rawLimit = Number(params.get("limit"));
+  const rawOffset = Number(params.get("offset"));
+  const limit = Number.isFinite(rawLimit)
+    ? Math.max(1, Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.floor(rawLimit)))
+    : DASHBOARD_DEFAULT_PAGE_SIZE;
+  const offset = Number.isFinite(rawOffset)
+    ? Math.max(0, Math.min(DASHBOARD_MAX_OFFSET, Math.floor(rawOffset)))
+    : 0;
+  const query = String(params.get("q") ?? "").trim().slice(0, DASHBOARD_MAX_QUERY_LENGTH);
+  const kind = params.get("kind") === "working" || params.get("kind") === "episodic"
+    ? params.get("kind")
+    : "all";
+  const bounded = (name) => String(params.get(name) ?? "").trim().slice(0, DASHBOARD_MAX_FILTER_LENGTH);
+  const enumValue = (name, allowed) => {
+    const value = bounded(name);
+    return allowed.has(value) ? value : "";
+  };
+  return {
+    limit, offset, query, kind,
+    source: bounded("source"),
+    scope: bounded("scope"),
+    session_id: bounded("session_id"),
+    veracity: enumValue("veracity", DASHBOARD_VERACITY_FILTERS),
+    degradation_tier: enumValue("degradation_tier", DASHBOARD_DEGRADATION_FILTERS),
+    contaminated_only: params.get("contaminated_only") === "1",
+    degraded_only: params.get("degraded_only") === "1",
+    due_for_degradation: params.get("due_for_degradation") === "1",
+    status: enumValue("status", DASHBOARD_STATUS_FILTERS) || "active",
+    sort: enumValue("sort", DASHBOARD_SORTS) || "recent",
+  };
+}
+
+/**
+ * Fixed read-only query adapter for the dashboard routes. It deliberately
+ * avoids SQLite virtual tables because the host Python may not load optional
+ * extensions such as sqlite-vec. All table names and SQL fragments are static;
+ * browser input is only bound as a SQLite value or a bounded paging number.
+ */
+const DASHBOARD_QUERY_SCRIPT = String.raw`
+import json, os, sqlite3, sys
+from pathlib import Path
+
+db_path = os.path.abspath(sys.argv[1])
+request = json.loads(sys.argv[2])
+if not os.path.isfile(db_path):
+    raise FileNotFoundError("Mnemosyne database not found: " + db_path)
+
+connection = sqlite3.connect(Path(db_path).as_uri() + "?mode=ro", uri=True, timeout=10)
+connection.row_factory = sqlite3.Row
+connection.execute("PRAGMA query_only = ON")
+
+MEMORY_COLUMNS = (
+    "id", "content", "source", "timestamp", "session_id", "importance",
+    "created_at", "recall_count", "last_recalled", "scope", "valid_until", "superseded_by",
+    "veracity", "degradation_tier", "degradation_label", "contaminated", "degradation_weight", "trust_weight",
+)
+
+def tables_present():
+    allowed = ("working_memory", "episodic_memory", "memories", "triples", "consolidation_log")
+    placeholders = ",".join("?" for _ in allowed)
+    return {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN (" + placeholders + ")", allowed
+    )}
+
+TABLES = tables_present()
+
+def columns_for(table):
+    return {row[1] for row in connection.execute("PRAGMA table_info(" + table + ")")}
+
+def count_rows(table):
+    return connection.execute("SELECT COUNT(*) FROM " + table).fetchone()[0] if table in TABLES else 0
+
+def memory_source(table, kind, query, kind_filter, today_only, request):
+    if table not in TABLES or (kind_filter != "all" and kind != kind_filter):
+        return None, []
+    columns = columns_for(table)
+    # Mnemosyne's current BEAM store and legacy compatibility table share IDs;
+    # prefer the current row when both copies are present.
+    select = [str(0 if table == "working_memory" else 1 if table == "episodic_memory" else 2) + " AS source_rank", "'" + kind + "' AS kind"]
+    for column in MEMORY_COLUMNS:
+        if column == "content" and column in columns:
+            select.append("substr(COALESCE(content, ''), 1, 8000) AS content")
+        elif column == "degradation_tier" and "tier" in columns:
+            select.append("tier AS degradation_tier")
+        elif column == "degradation_label" and "tier" in columns:
+            select.append("CASE CAST(COALESCE(tier, 1) AS INTEGER) WHEN 1 THEN 'hot' WHEN 2 THEN 'warm' WHEN 3 THEN 'cold' ELSE NULL END AS degradation_label")
+        elif column in columns:
+            select.append(column)
+        else:
+            select.append("NULL AS " + column)
+    where, values = [], []
+    if query:
+        where.append("lower(COALESCE(content, '')) LIKE ?")
+        values.append("%" + query.lower() + "%")
+    for field in ("source", "scope", "session_id"):
+        value = request.get(field, "")
+        if value:
+            if field not in columns:
+                return None, []
+            where.append("COALESCE(" + field + ", '') = ?")
+            values.append(value)
+    veracity = request.get("veracity", "")
+    if veracity:
+        if "veracity" not in columns:
+            return None, []
+        where.append("COALESCE(veracity, 'unknown') = ?")
+        values.append(veracity)
+    lifecycle_column = "degradation_tier" if "degradation_tier" in columns else "tier" if "tier" in columns else None
+    degradation_tier = request.get("degradation_tier", "")
+    if degradation_tier:
+        if not lifecycle_column:
+            return None, []
+        where.append("CAST(COALESCE(" + lifecycle_column + ", 0) AS INTEGER) = ?")
+        values.append(int(degradation_tier))
+    if request.get("contaminated_only"):
+        if "contaminated" in columns:
+            where.append("COALESCE(contaminated, 0) = 1")
+        elif "veracity" in columns:
+            where.append("COALESCE(veracity, 'unknown') IN ('unknown', 'inferred', 'imported')")
+        else:
+            return None, []
+    if request.get("degraded_only"):
+        if not lifecycle_column:
+            return None, []
+        where.append("CAST(COALESCE(" + lifecycle_column + ", 1) AS INTEGER) > 1")
+    if request.get("due_for_degradation"):
+        if not lifecycle_column:
+            return None, []
+        where.append("CAST(COALESCE(" + lifecycle_column + ", 1) AS INTEGER) > 1")
+    status = request.get("status", "active")
+    if status != "all":
+        if status == "expired":
+            if "valid_until" not in columns:
+                return None, []
+            where.append("valid_until IS NOT NULL AND TRIM(valid_until) <> '' AND datetime(valid_until) <= datetime('now')")
+        elif status == "superseded":
+            if "superseded_by" not in columns:
+                return None, []
+            where.append("superseded_by IS NOT NULL AND TRIM(superseded_by) <> ''")
+        else:
+            if "valid_until" in columns:
+                where.append("(valid_until IS NULL OR TRIM(valid_until) = '' OR datetime(valid_until) > datetime('now'))")
+            if "superseded_by" in columns:
+                where.append("(superseded_by IS NULL OR TRIM(superseded_by) = '')")
+    if today_only:
+        time_column = "timestamp" if "timestamp" in columns else "created_at" if "created_at" in columns else None
+        if time_column:
+            where.append("date(COALESCE(" + time_column + ", '')) = date('now', 'localtime')")
+    sql = "SELECT " + ", ".join(select) + " FROM " + table
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return sql, values
+
+def read_memories(request):
+    limit = int(request["limit"])
+    offset = int(request["offset"])
+    query = request["query"]
+    kind_filter = request["kind"]
+    today_only = request.get("today", False)
+    sources, values = [], []
+    for table, kind in (("working_memory", "working"), ("episodic_memory", "episodic"), ("memories", "working")):
+        sql, source_values = memory_source(table, kind, query, kind_filter, today_only, request)
+        if sql:
+            sources.append(sql)
+            values.extend(source_values)
+    if not sources:
+        return {"items": [], "hasMore": False, "offset": offset, "limit": limit}
+    visible = ", ".join(["kind"] + list(MEMORY_COLUMNS))
+    union = " UNION ALL ".join(sources)
+    sort = request.get("sort", "recent")
+    order_by = {
+        "oldest": "COALESCE(timestamp, created_at, '') ASC, id ASC",
+        "importance": "COALESCE(importance, 0) DESC, COALESCE(timestamp, created_at, '') DESC, id DESC",
+        "recall": "COALESCE(recall_count, 0) DESC, COALESCE(timestamp, created_at, '') DESC, id DESC",
+        "recent": "COALESCE(timestamp, created_at, '') DESC, id DESC",
+    }.get(sort, "COALESCE(timestamp, created_at, '') DESC, id DESC")
+    sql = (
+        "SELECT " + visible + " FROM ("
+        "SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY source_rank ASC) AS duplicate_rank "
+        "FROM (" + union + ")"
+        ") WHERE duplicate_rank = 1 "
+        "ORDER BY " + order_by + " LIMIT ? OFFSET ?"
+    )
+    rows = [dict(row) for row in connection.execute(sql, values + [limit + 1, offset]).fetchall()]
+    return {"items": rows[:limit], "hasMore": len(rows) > limit, "offset": offset, "limit": limit}
+
+def read_triples(request):
+    if "triples" not in TABLES:
+        return {"items": [], "hasMore": False, "offset": request["offset"], "limit": request["limit"]}
+    columns = columns_for("triples")
+    select = []
+    for column in ("id", "subject", "predicate", "object", "valid_from", "valid_until", "source", "confidence", "created_at"):
+        if column in columns:
+            value = "substr(COALESCE(" + column + ", ''), 1, 1000) AS " + column if column in ("subject", "predicate", "object", "source") else column
+            select.append(value)
+        else:
+            select.append("NULL AS " + column)
+    query = request["query"]
+    where, values = [], []
+    if query:
+        where.append("(lower(COALESCE(subject, '')) LIKE ? OR lower(COALESCE(predicate, '')) LIKE ? OR lower(COALESCE(object, '')) LIKE ?)")
+        values.extend(["%" + query.lower() + "%"] * 3)
+    sql = "SELECT " + ", ".join(select) + " FROM triples"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY COALESCE(created_at, '') DESC, id DESC LIMIT ? OFFSET ?"
+    rows = [dict(row) for row in connection.execute(sql, values + [request["limit"] + 1, request["offset"]]).fetchall()]
+    return {"items": rows[:request["limit"]], "hasMore": len(rows) > request["limit"], "offset": request["offset"], "limit": request["limit"]}
+
+def read_consolidations(request):
+    if "consolidation_log" not in TABLES:
+        return {"items": [], "hasMore": False, "offset": request["offset"], "limit": request["limit"]}
+    columns = columns_for("consolidation_log")
+    select = []
+    for column in ("id", "session_id", "items_consolidated", "summary_preview", "created_at"):
+        if column in columns:
+            value = "substr(COALESCE(summary_preview, ''), 1, 1200) AS summary_preview" if column == "summary_preview" else column
+            select.append(value)
+        else:
+            select.append("NULL AS " + column)
+    sql = "SELECT " + ", ".join(select) + " FROM consolidation_log ORDER BY COALESCE(created_at, '') DESC, id DESC LIMIT ? OFFSET ?"
+    rows = [dict(row) for row in connection.execute(sql, [request["limit"] + 1, request["offset"]]).fetchall()]
+    return {"items": rows[:request["limit"]], "hasMore": len(rows) > request["limit"], "offset": request["offset"], "limit": request["limit"]}
+
+def read_memory_detail(memory_id):
+    for table, kind in (("working_memory", "working"), ("episodic_memory", "episodic"), ("memories", "working")):
+        if table not in TABLES:
+            continue
+        columns = columns_for(table)
+        select = ["'" + kind + "' AS kind"]
+        for column in MEMORY_COLUMNS:
+            if column == "content" and column in columns:
+                select.append("substr(COALESCE(content, ''), 1, 12000) AS content")
+            elif column in columns:
+                select.append(column)
+            else:
+                select.append("NULL AS " + column)
+        sql = "SELECT " + ", ".join(select) + " FROM " + table + " WHERE id = ? LIMIT 1"
+        row = connection.execute(sql, (memory_id,)).fetchone()
+        if row:
+            return dict(row)
+    return None
+
+MEMORIA_TABLE_COLUMNS = {
+    "memoria_facts": ("key", "value", "context_snippet", "importance", "timestamp", "session_id", "fact_type", "message_idx", "source_memory_id"),
+    "memoria_timelines": ("date", "description", "source", "session_id", "message_idx", "source_memory_id"),
+    "memoria_instructions": ("instruction", "topic", "context_snippet", "active", "session_id", "message_idx", "source_memory_id"),
+    "memoria_preferences": ("preference", "topic", "evolution", "context_snippet", "session_id", "message_idx", "source_memory_id"),
+    "memoria_kg": ("subject", "predicate", "object", "confidence", "session_id", "message_idx", "source_memory_id"),
+    "memoria_persona": ("tier", "topic", "content", "confidence", "session_id", "created_at", "source_memory_id"),
+}
+
+def read_memoria_list(table_name, query):
+    if table_name not in MEMORIA_TABLE_COLUMNS or table_name not in TABLES:
+        return {"items": []}
+    columns = columns_for(table_name)
+    select = [column for column in MEMORIA_TABLE_COLUMNS[table_name] if column in columns]
+    if not select:
+        return {"items": []}
+    text_columns = [c for c in select if c in ("key", "value", "description", "instruction", "preference", "topic", "context_snippet", "subject", "predicate", "object", "content", "date")]
+    where, values = [], []
+    if query and text_columns:
+        clauses = " OR ".join("lower(COALESCE(" + c + ", '')) LIKE ?" for c in text_columns)
+        where.append("(" + clauses + ")")
+        values.extend(["%" + query.lower() + "%"] * len(text_columns))
+    sql = "SELECT " + ", ".join(select) + " FROM " + table_name
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY rowid DESC LIMIT 200"
+    rows = [dict(row) for row in connection.execute(sql, values).fetchall()]
+    for row in rows:
+        for column in text_columns:
+            if column in row and isinstance(row[column], str) and len(row[column]) > 600:
+                row[column] = row[column][:600]
+    return {"items": rows}
+
+try:
+    mode = request["mode"]
+    if mode == "summary":
+        result = {
+            "counts": {
+                "working": count_rows("working_memory"),
+                "episodic": count_rows("episodic_memory"),
+                "triples": count_rows("triples"),
+                "consolidations": count_rows("consolidation_log"),
+            },
+            "features": {"triples": "triples" in TABLES, "consolidations": "consolidation_log" in TABLES},
+        }
+        result["counts"]["total"] = result["counts"]["working"] + result["counts"]["episodic"]
+    elif mode == "breakdown":
+        field = request.get("field")
+        rows = []
+        if field in ("source", "scope", "session_id"):
+            memory_tables = (("working_memory", "episodic_memory") if "working_memory" in TABLES else ("memories",))
+            counts = {}
+            for name in memory_tables:
+                if name not in TABLES: continue
+                columns = columns_for(name)
+                if field not in columns: continue
+                for row in connection.execute(
+                    "SELECT COALESCE(" + field + ", '') AS value, COUNT(*) AS count FROM " + name +
+                    " GROUP BY COALESCE(" + field + ", '')"
+                ).fetchall():
+                    counts[row["value"]] = counts.get(row["value"], 0) + row["count"]
+            rows = [{"value": value, "count": count} for value, count in counts.items()]
+            rows.sort(key=lambda row: (-row["count"], row["value"]))
+            rows = rows[:12]
+        result = {"items": rows}
+    elif mode == "memories":
+        result = read_memories(request)
+    elif mode == "today":
+        request["today"] = True
+        result = read_memories(request)
+    elif mode == "detail":
+        result = {"item": read_memory_detail(request.get("id", ""))}
+    elif mode == "triples":
+        result = read_triples(request)
+    elif mode == "consolidations":
+        result = read_consolidations(request)
+    elif mode == "memoria_stats":
+        tables = {}
+        for name in ("memoria_facts", "memoria_timelines", "memoria_instructions", "memoria_preferences", "memoria_kg", "memoria_persona"):
+            tables[name] = {"count": count_rows(name)}
+        merged = {}
+        for name in ("memoria_facts", "memoria_timelines", "memoria_instructions", "memoria_preferences"):
+            if name not in TABLES or "session_id" not in columns_for(name):
+                continue
+            for row in connection.execute("SELECT COALESCE(session_id, '') AS value, COUNT(*) AS count FROM " + name + " GROUP BY COALESCE(session_id, '')").fetchall():
+                merged[row["value"]] = merged.get(row["value"], 0) + row["count"]
+        result = {
+            "tables": tables,
+            "top_sessions": [{"session_id": key, "count": count} for key, count in sorted(merged.items(), key=lambda item: -item[1])[:8]],
+        }
+    elif mode == "memoria_list":
+        result = read_memoria_list(request.get("table", ""), request["query"])
+    else:
+        raise ValueError("unsupported dashboard mode")
+    print(json.dumps({"ok": True, "data": result}, ensure_ascii=False, separators=(",", ":")))
+finally:
+    connection.close()
+`;
+
+/** Execute a fixed dashboard query against the configured active bank. */
+export async function readDashboardData(dataDir, mode, options = {}, baseEnv = process.env) {
+  const db = resolveBankDbPath(dataDir, baseEnv);
+  if (!existsSync(db) || !statSync(db).isFile()) {
+    throw new Error(`Mnemosyne database not found: ${db}`);
+  }
+  const request = {
+    mode,
+    limit: Math.max(1, Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.floor(Number(options.limit) || DASHBOARD_DEFAULT_PAGE_SIZE))),
+    offset: Math.max(0, Math.min(DASHBOARD_MAX_OFFSET, Math.floor(Number(options.offset) || 0))),
+    query: String(options.query ?? "").trim().slice(0, DASHBOARD_MAX_QUERY_LENGTH),
+    kind: options.kind === "working" || options.kind === "episodic" ? options.kind : "all",
+    field: ["source", "scope", "session_id"].includes(options.field) ? options.field : "",
+    id: String(options.id ?? "").trim().slice(0, 128),
+    source: String(options.source ?? "").trim().slice(0, DASHBOARD_MAX_FILTER_LENGTH),
+    scope: String(options.scope ?? "").trim().slice(0, DASHBOARD_MAX_FILTER_LENGTH),
+    session_id: String(options.session_id ?? "").trim().slice(0, DASHBOARD_MAX_FILTER_LENGTH),
+    veracity: DASHBOARD_VERACITY_FILTERS.has(options.veracity) ? options.veracity : "",
+    degradation_tier: DASHBOARD_DEGRADATION_FILTERS.has(String(options.degradation_tier ?? "")) ? String(options.degradation_tier) : "",
+    contaminated_only: options.contaminated_only === true || options.contaminated_only === "1",
+    degraded_only: options.degraded_only === true || options.degraded_only === "1",
+    due_for_degradation: options.due_for_degradation === true || options.due_for_degradation === "1",
+    status: DASHBOARD_STATUS_FILTERS.has(options.status) ? options.status : "active",
+    sort: DASHBOARD_SORTS.has(options.sort) ? options.sort : "recent",
+    table: ["memoria_facts", "memoria_timelines", "memoria_instructions", "memoria_preferences", "memoria_kg", "memoria_persona"].includes(options.table) ? options.table : "",
+  };
+  const stdout = await runExec("python3", ["-c", DASHBOARD_QUERY_SCRIPT, db, JSON.stringify(request)], 15_000);
+  const payload = JSON.parse(stdout);
+  if (!payload?.ok || !payload.data) throw new Error("Invalid dashboard response");
+  return payload.data;
+}
+
+const DASHBOARD_ASSET_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "assets", "dashboard");
+const DASHBOARD_ASSET_TYPES = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".woff2": "font/woff2",
+};
+
+/** Dashboard reads also permit a direct top-level navigation from the local
+ *  host (Sec-Fetch-Site: none) so the memory dashboard can be opened in a tab
+ *  for its own session; cross-site fetches remain blocked, and the loopback
+ *  host check still defeats DNS rebinding. */
+function dashboardRead(req) {
+  const site = req.headers["sec-fetch-site"];
+  return isLoopbackHost(req.headers.host) && (site === undefined || site === "same-origin" || site === "none");
+}
+
+function dashboardAssetPath(pathname) {
+  const target = pathname === "/mnemosyne/dashboard" || pathname === "/mnemosyne/dashboard/"
+    ? "index.html"
+    : pathname.startsWith("/mnemosyne/dashboard/static/")
+      ? join("static", pathname.slice("/mnemosyne/dashboard/static/".length))
+      : null;
+  if (!target) return null;
+  const resolved = resolvePath(DASHBOARD_ASSET_ROOT, target);
+  if (!resolved.startsWith(DASHBOARD_ASSET_ROOT)) return null;
+  return resolved;
+}
+
+function sendDashboardAsset(req, res) {
+  const file = dashboardAssetPath(req.url?.split("?")[0]);
+  if (!file || !existsSync(file) || !statSync(file).isFile()) return sendJson(res, 404, { error: "dashboard asset not found" });
+  const type = DASHBOARD_ASSET_TYPES[file.slice(file.lastIndexOf("."))] || "application/octet-stream";
+  const body = readFileSync(file);
+  res.writeHead(200, {
+    "content-type": type,
+    "cache-control": pathnameCache(file),
+    "x-content-type-options": "nosniff",
+    // The upstream dashboard refuses to be framed (frame-ancestors 'none').
+    // dsh-mnemosyne deliberately embeds it in a same-origin sidebar iframe,
+    // so allow same-origin ancestors only.
+    "content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; script-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'",
+  });
+  res.end(body);
+}
+
+function pathnameCache(file) {
+  return file.endsWith(".woff2") || file.endsWith("three.module.min.js") ? "public, max-age=31536000, immutable" : "no-store";
+}
+
+/** Map one upstream endpoint to the existing bounded dashboard query adapter. */
+async function readUpstreamDashboardApi(runtime, env, url) {
+  const parsed = new URL(url ?? "/", "http://localhost");
+  const route = parsed.pathname.replace(/^\/mnemosyne\/dashboard\/api\//, "").replace(/\/$/, "") || "stats";
+  const options = parseDashboardListParams(url);
+  const dbPath = resolveBankDbPath(runtime.dataDir, env);
+  const now = () => new Date();
+  const dayKey = (value) => {
+    const d = new Date(String(value || ""));
+    return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : "";
+  };
+  const localDayKey = (value) => {
+    const d = new Date(String(value || ""));
+    if (!Number.isFinite(d.getTime())) return "";
+    const shifted = new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+    return shifted;
+  };
+  const todayKey = new Date(now().getTime() - now().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+
+  if (route === "auth/status" || route === "auth") {
+    return { config: { host: "127.0.0.1", memory_admin_enabled: false }, auth_enabled: false, authenticated: true };
+  }
+  if (route === "runtime/status") {
+    return { ok: true, running: true, pid: process.pid, started_at: null, config: { host: "127.0.0.1" } };
+  }
+  if (route === "realtime/status") {
+    return { ok: true, paused: false, connected: false, events: [] };
+  }
+
+  if (route === "stats") {
+    const [summary, bySource, byScope, bySession] = await Promise.all([
+      readDashboardData(runtime.dataDir, "summary", {}, env),
+      readDashboardData(runtime.dataDir, "breakdown", { field: "source" }, env),
+      readDashboardData(runtime.dataDir, "breakdown", { field: "scope" }, env),
+      readDashboardData(runtime.dataDir, "breakdown", { field: "session_id" }, env),
+    ]);
+    return {
+      db_path: dbPath,
+      counts: {
+        working_memory: summary.counts.working,
+        episodic_memory: summary.counts.episodic,
+        triples: summary.counts.triples,
+        consolidation_log: summary.counts.consolidations,
+        total: summary.counts.total,
+      },
+      by_source: bySource.items.map((row) => ({ source: row.value, count: row.count })),
+      by_scope: byScope.items.map((row) => ({ scope: row.value, count: row.count })),
+      by_session: bySession.items.map((row) => ({ session_id: row.value, count: row.count })),
+      by_veracity: [],
+      by_degradation: [],
+      contamination: { total: 0 },
+      degradation: { degraded: 0 },
+    };
+  }
+
+  if (route === "memories") {
+    const params = parsed.searchParams;
+    const kind = params.get("kind") || "all";
+    const data = await readDashboardData(runtime.dataDir, "memories", {
+      query: options.query,
+      kind: kind === "working" || kind === "episodic" ? kind : "all",
+      limit: Math.min(200, Number(params.get("limit")) || 150),
+      offset: options.offset,
+      source: options.source,
+      scope: options.scope,
+      session_id: options.session_id,
+      veracity: options.veracity,
+      degradation_tier: options.degradation_tier,
+      contaminated_only: options.contaminated_only,
+      degraded_only: options.degraded_only,
+      due_for_degradation: options.due_for_degradation,
+      status: options.status,
+      sort: options.sort,
+    }, env);
+    return { items: data.items.map(upstreamMemoryItem), total: data.offset + data.items.length };
+  }
+
+  if (route === "today") {
+    const data = await readDashboardData(runtime.dataDir, "today", { kind: "all", limit: 100 }, env);
+    return { items: data.items.map(upstreamMemoryItem), total: data.items.length };
+  }
+
+  if (route === "memory") {
+    const id = String(parsed.searchParams.get("id") ?? "").trim().slice(0, 128);
+    const data = await readDashboardData(runtime.dataDir, "detail", { id }, env);
+    return { item: data.item ? upstreamMemoryItem(data.item) : null };
+  }
+
+  if (route === "search") {
+    const [memories, triples, consolidations] = await Promise.all([
+      readDashboardData(runtime.dataDir, "memories", { query: options.query, limit: 30 }, env),
+      readDashboardData(runtime.dataDir, "triples", { query: options.query, limit: 30 }, env),
+      readDashboardData(runtime.dataDir, "consolidations", { query: options.query, limit: 30 }, env),
+    ]);
+    return {
+      memories: memories.items.map(upstreamMemoryItem),
+      triples: triples.items,
+      consolidations: consolidations.items,
+    };
+  }
+
+  if (route === "triples") {
+    const data = await readDashboardData(runtime.dataDir, "triples", { query: options.query, limit: 300 }, env);
+    return { items: data.items };
+  }
+
+  if (route === "consolidations") {
+    const data = await readDashboardData(runtime.dataDir, "consolidations", { limit: 200 }, env);
+    return { items: data.items };
+  }
+
+  if (route === "digest/today" || route === "digest") {
+    const [today, triples, consolidations, source] = await Promise.all([
+      readDashboardData(runtime.dataDir, "today", { limit: 80 }, env),
+      readDashboardData(runtime.dataDir, "triples", { limit: 200 }, env),
+      readDashboardData(runtime.dataDir, "consolidations", { limit: 200 }, env),
+      readDashboardData(runtime.dataDir, "breakdown", { field: "source" }, env),
+    ]);
+    const memoriesAdded = today.items.map(upstreamMemoryItem);
+    const triplesAdded = triples.items.filter((row) => localDayKey(row.created_at || row.valid_from) === todayKey);
+    const consolidationsAdded = consolidations.items.filter((row) => localDayKey(row.created_at) === todayKey);
+    const sourcesToday = memoriesAdded.reduce((acc, row) => {
+      const key = row.source || "unknown";
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    return {
+      counts: {
+        memories_added: memoriesAdded.length,
+        memories_recalled: 0,
+        contaminated_added: 0,
+        degraded_added: 0,
+        triples_added: triplesAdded.length,
+        consolidations: consolidationsAdded.length,
+      },
+      breakdowns: {
+        entities: [],
+        veracity: [],
+        degradation: [],
+        sources: Object.entries(sourcesToday).map(([label, count]) => ({ label, count })),
+        sessions: [],
+      },
+      memories_added: memoriesAdded,
+      memories_recalled: [],
+      triples_added: triplesAdded,
+      consolidations: consolidationsAdded,
+    };
+  }
+
+  if (route === "timeline") {
+    const memories = await readDashboardData(runtime.dataDir, "memories", { query: options.query, limit: 300 }, env);
+    const group = parsed.searchParams.get("group") || "day";
+    const groups = new Map();
+    for (const row of memories.items) {
+      const key = group === "session" ? (row.session_id || "no session") : localDayKey(row.timestamp || row.created_at) || "unknown";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({
+        type: row.kind === "episodic" ? "episodic" : "working",
+        session_id: row.session_id || "",
+        timestamp: row.timestamp || row.created_at || "",
+        title: String(row.content || "").slice(0, 90),
+        preview: String(row.content || "").slice(0, 200),
+        item: upstreamMemoryItem(row),
+      });
+    }
+    return {
+      groups: [...groups.entries()].map(([key, events]) => ({ key, count: events.length, events })),
+    };
+  }
+
+  if (route === "session") {
+    const sessionId = String(parsed.searchParams.get("id") ?? "").trim().slice(0, 200);
+    const memories = await readDashboardData(runtime.dataDir, "memories", { limit: 200 }, env);
+    const events = memories.items
+      .filter((row) => String(row.session_id || "") === sessionId)
+      .map((row) => ({
+        type: row.kind === "episodic" ? "episodic" : "working",
+        timestamp: row.timestamp || row.created_at || "",
+        title: String(row.content || "").slice(0, 90),
+        preview: String(row.content || "").slice(0, 200),
+        item: upstreamMemoryItem(row),
+      }));
+    return { counts: { memories: events.length, triples: 0, consolidations: 0, events: events.length }, events };
+  }
+
+  if (route === "graph" || route === "constellation") {
+    const [triples, memories] = await Promise.all([
+      readDashboardData(runtime.dataDir, "triples", { query: options.query, limit: 300 }, env),
+      readDashboardData(runtime.dataDir, "memories", { query: options.query, limit: 120 }, env),
+    ]);
+    const nodeIds = new Set();
+    const nodes = [];
+    const edges = [];
+    const nodeFor = (label, kind) => {
+      if (!nodeIds.has(label)) {
+        nodeIds.add(label);
+        nodes.push({ id: label, label, kind, category: "entity", count: 0, weight: 1, preview: "" });
+      }
+      const node = nodes.find((item) => item.id === label);
+      node.count += 1;
+      return node;
+    };
+    for (const triple of triples.items) {
+      if (triple.subject) nodeFor(String(triple.subject).slice(0, 80), "entity");
+      if (triple.object) nodeFor(String(triple.object).slice(0, 80), "entity");
+      if (triple.subject && triple.object) {
+        edges.push({
+          id: `edge:${triple.id || edges.length}`,
+          source: String(triple.subject).slice(0, 80),
+          target: String(triple.object).slice(0, 80),
+          predicate: String(triple.predicate || "relates").slice(0, 60),
+        });
+      }
+    }
+    for (const row of memories.items) {
+      const id = `memory:${row.id}`;
+      const label = `memory:${String(row.content || "").slice(0, 24)}`;
+      if (!nodeIds.has(id)) {
+        nodeIds.add(id);
+        nodes.push({
+          id, label, kind: "memory", category: row.scope || "Other",
+          count: 1, weight: Number(row.importance ?? 0.5), preview: String(row.content || "").slice(0, 200), memory_id: row.id,
+        });
+      }
+    }
+    return { nodes: nodes.slice(0, 160), edges: edges.slice(0, 300) };
+  }
+
+  if (route === "lifecycle") {
+    const summary = await readDashboardData(runtime.dataDir, "summary", {}, env);
+    return {
+      thresholds: { tier2_days: 30, tier3_days: 180, weights: { "1": 1, "2": 0.5, "3": 0.25 } },
+      cards: [
+        { key: "active", count: summary.counts.total, title: "Active memories", description: "Memories that are currently part of recall." },
+        { key: "due_degradation", count: 0, title: "Due for degradation", description: "Read-only dashboard: no degradation is triggered here." },
+        { key: "degraded", count: 0, title: "Degraded", description: "Tier-2 and tier-3 memories." },
+      ],
+      queues: {},
+    };
+  }
+
+  if (route === "patterns") {
+    return {
+      summary: { indexed_memories: 0, indexed_triples: 0, patterns_found: 0 },
+      provider: null,
+      content_patterns: [],
+      temporal_patterns: [],
+      sequence_patterns: [],
+      context_domains: [],
+      origins: [],
+      memory_types: [],
+    };
+  }
+
+  if (route === "profile/inferred" || route === "profile") {
+    return { summary: { indexed_signals: 0, needs_review: 0, sensitive: 0, sections: 0, types: [] }, sections: [] };
+  }
+
+  if (route === "review") {
+    return { queues: {}, cards: [], total: 0, has_more: false, next_offset: null };
+  }
+
+  if (route === "recall-debug") {
+    return { note: "Read-only recall debug for the active bank.", items: [] };
+  }
+
+  if (route === "diagnostics") {
+    return { ok: true, missing_expected_tables: [], counts: {}, tables: [] };
+  }
+
+  if (route === "memoria/stats") {
+    const data = await readDashboardData(runtime.dataDir, "memoria_stats", {}, env);
+    return data;
+  }
+
+  if (route.startsWith("memoria/")) {
+    const tableName = route === "memoria/kg"
+      ? "memoria_kg"
+      : `memoria_${route.slice("memoria/".length)}`;
+    const allowlist = ["memoria_facts", "memoria_timelines", "memoria_instructions", "memoria_preferences", "memoria_kg", "memoria_persona"];
+    if (!allowlist.includes(tableName)) return { items: [] };
+    const data = await readDashboardData(runtime.dataDir, "memoria_list", { table: tableName, query: options.query }, env);
+    return data;
+  }
+
+  return { error: `unsupported dashboard API: ${route}` };
+}
+
+function upstreamMemoryItem(row) {
+  const veracity = row.veracity || "unknown";
+  const validUntil = row.valid_until || "";
+  const supersededBy = row.superseded_by || "";
+  const status = supersededBy
+    ? "superseded"
+    : validUntil && Number.isFinite(new Date(validUntil).getTime()) && new Date(validUntil).getTime() <= Date.now()
+      ? "expired"
+      : "active";
+  const contaminated = row.contaminated === true || row.contaminated === 1 || row.contaminated === "1"
+    || ["unknown", "inferred", "imported"].includes(String(veracity).toLowerCase());
+  return {
+    id: row.id,
+    content: row.content,
+    source: row.source,
+    timestamp: row.timestamp,
+    session_id: row.session_id,
+    importance: row.importance ?? 0,
+    created_at: row.created_at || row.timestamp,
+    recall_count: row.recall_count ?? 0,
+    last_recalled: row.last_recalled,
+    scope: row.scope,
+    memory_kind: row.kind === "episodic" ? "episodic" : "working",
+    status,
+    veracity,
+    valid_until: validUntil || null,
+    superseded_by: supersededBy || null,
+    degradation_tier: row.degradation_tier,
+    degradation_label: row.degradation_label,
+    degradation_weight: row.degradation_weight,
+    trust_weight: row.trust_weight,
+    contaminated,
+  };
+}
+
 /** Count rows in consolidation_log via python3 (mnemosyne ships python).
  *  The active bank is resolved exactly like the CLI. Missing databases fail
  *  explicitly and the read-only SQLite URI prevents implicit creation. */
@@ -1215,6 +1977,88 @@ export function apply(ctx, config) {
   ctx.inject(["webServer"], (hostCtx) => {
     const web = hostCtx.webServer;
     const disposers = [];
+    const registerDashboardReadRoute = (path, mode) => {
+      disposers.push(
+        web.register({
+          kind: "exact",
+          path,
+          handler: async (req, res) => {
+            if (req.method !== "GET") return sendJson(res, 405, { error: "GET only" });
+            if (!trustedRead(req)) return sendJson(res, 403, { error: "untrusted origin" });
+            try {
+              const data = await readDashboardData(runtimeCfg().dataDir, mode, parseDashboardListParams(req.url), env());
+              sendJson(res, 200, { ok: true, bank: resolveActiveBank(env()), data });
+            } catch (e) {
+              const error = String(e?.message ?? e);
+              sendJson(res, error.startsWith("Mnemosyne database not found:") ? 404 : 500, { ok: false, error });
+            }
+          },
+        })
+      );
+    };
+
+    registerDashboardReadRoute("/mnemosyne/dashboard/summary", "summary");
+    registerDashboardReadRoute("/mnemosyne/dashboard/memories", "memories");
+    registerDashboardReadRoute("/mnemosyne/dashboard/today", "today");
+    registerDashboardReadRoute("/mnemosyne/dashboard/triples", "triples");
+    registerDashboardReadRoute("/mnemosyne/dashboard/consolidations", "consolidations");
+
+    disposers.push(
+      web.register({
+        kind: "prefix",
+        path: "/mnemosyne/dashboard/api",
+        handler: async (req, res) => {
+          if (req.method !== "GET") return sendJson(res, 405, { error: "GET only" });
+          if (!dashboardRead(req)) return sendJson(res, 403, { error: "untrusted origin" });
+          try {
+            const payload = await readUpstreamDashboardApi(runtimeCfg(), env(), req.url);
+            if (payload && typeof payload.error === "string" && payload.error.startsWith("unsupported dashboard API")) {
+              return sendJson(res, 404, { error: payload.error });
+            }
+            sendJson(res, 200, payload);
+          } catch (e) {
+            const error = String(e?.message ?? e);
+            sendJson(res, error.startsWith("Mnemosyne database not found:") ? 404 : 500, { error });
+          }
+        },
+      })
+    );
+
+    disposers.push(
+      web.register({
+        kind: "exact",
+        path: "/mnemosyne/dashboard",
+        handler: async (req, res) => {
+          if (req.method !== "GET") return sendJson(res, 405, { error: "GET only" });
+          if (!dashboardRead(req)) return sendJson(res, 403, { error: "untrusted origin" });
+          sendDashboardAsset(req, res);
+        },
+      })
+    );
+
+    disposers.push(
+      web.register({
+        kind: "exact",
+        path: "/mnemosyne/dashboard/",
+        handler: async (req, res) => {
+          if (req.method !== "GET") return sendJson(res, 405, { error: "GET only" });
+          if (!dashboardRead(req)) return sendJson(res, 403, { error: "untrusted origin" });
+          sendDashboardAsset(req, res);
+        },
+      })
+    );
+
+    disposers.push(
+      web.register({
+        kind: "prefix",
+        path: "/mnemosyne/dashboard/static",
+        handler: async (req, res) => {
+          if (req.method !== "GET") return sendJson(res, 405, { error: "GET only" });
+          if (!dashboardRead(req)) return sendJson(res, 403, { error: "untrusted origin" });
+          sendDashboardAsset(req, res);
+        },
+      })
+    );
 
     disposers.push(
       web.register({

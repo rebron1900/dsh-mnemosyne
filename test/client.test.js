@@ -87,6 +87,77 @@ describe("client module", () => {
     assert.equal(typeof slot.render, "function");
   });
 
+  it("registers a single read-only dashboard tab when Better Sidebar is available", () => {
+    const registered = { locale: [], tabs: [], opened: [] };
+    const sidebar = {
+      registerTab: (tab) => { registered.tabs.push(tab); return () => {}; },
+      openTab: (seed) => registered.opened.push(seed),
+    };
+    const ctx = {
+      effect: (fn) => fn(),
+      get: (key) => key === "betterSidebar" ? sidebar : undefined,
+      locale: {
+        register: (ns, dict) => { registered.locale.push({ ns, dict }); },
+        bind: (ns) => (key) => `[${ns}]${key}`,
+      },
+      settingsScope: {
+        bind: (opts) => ({ namespace: opts.namespace, getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
+      },
+      slots: {
+        inject: (slot, gen) => { for (const _entry of gen()) { /* settings registration is unrelated here */ } },
+        register: (opts, render) => ({ opts, render }),
+      },
+    };
+    mod.apply(ctx);
+    assert.equal(registered.tabs.length, 1);
+    const tab = registered.tabs[0];
+    assert.equal(tab.id, "dsh-mnemosyne:memory-dashboard");
+    assert.equal(tab.single, true);
+    assert.equal(tab.order, 55);
+    assert.equal(typeof tab.component, "function");
+    assert.equal(tab.title(), "[dsh-mnemosyne]dashboardTitle");
+    assert.equal(typeof tab.icon, "function");
+    const dashboard = tab.component({ visible: true });
+    assert.equal(typeof dashboard.type, "function");
+    assert.equal(dashboard.props.t("dashboardTitle"), "[dsh-mnemosyne]dashboardTitle");
+    const rendered = dashboard.type({ ...dashboard.props });
+    assert.equal(rendered.type, "section");
+    assert.equal(rendered.props.className, "mn-upstream");
+    const frame = rendered.children[0];
+    assert.equal(frame.props.className, "mn-upstream-frame");
+    const iframe = frame.children[0];
+    assert.equal(iframe.type, "iframe");
+    assert.equal(iframe.props.src, "/mnemosyne/dashboard/?lang=en", "iframe passes the host language");
+    assert.ok(registered.locale[0].dict.zh.dashboardTitle);
+    assert.ok(registered.locale[0].dict.en.dashboardTitle);
+  });
+
+  it("registers the dashboard tab lazily when Better Sidebar appears after apply", () => {
+    const registered = { locale: [], tabs: [], effects: [] };
+    const sidebar = {
+      registerTab: (tab) => { registered.tabs.push(tab); return () => {}; },
+      openTab: () => {},
+    };
+    let injected = null;
+    const ctx = {
+      effect: (fn) => { registered.effects.push(fn); return () => {}; },
+      inject: (deps, cb) => { if (deps && deps[0] === "betterSidebar") injected = cb; },
+      locale: {
+        register: (ns, dict) => { registered.locale.push({ ns, dict }); },
+        bind: (ns) => (key) => `[${ns}]${key}`,
+      },
+      settingsScope: { bind: () => ({}) },
+      slots: { inject: () => {}, register: () => ({}) },
+    };
+    mod.apply(ctx);
+    assert.equal(registered.tabs.length, 0, "no eager registration when the service is absent");
+    assert.equal(typeof injected, "function", "dynamic inject waits for the sidebar provider");
+    // The provider arrives after apply: the injection callback now registers.
+    injected({ betterSidebar: sidebar, effect: (fn) => { registered.effects.push(fn()); return () => {}; } });
+    assert.equal(registered.tabs.length, 1);
+    assert.equal(registered.tabs[0].id, "dsh-mnemosyne:memory-dashboard");
+  });
+
   it("declares Hermes-compatible sync length controls", () => {
     assert.match(clientSrc, /key: "syncTurnUserLimit"/);
     assert.match(clientSrc, /key: "syncTurnAssistantLimit"/);

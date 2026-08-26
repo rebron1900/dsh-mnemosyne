@@ -156,6 +156,39 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       depsReindexFail: "索引重建失败",
       depsReindexRunning: "索引重建已在后台进行中",
       depsReindexBlocked: "请先保存或放弃未保存的修改，再重建索引",
+       dashboardOpen: "打开记忆面板",
+       dashboardTitle: "记忆面板",
+       dashboardReadOnly: "只读",
+       dashboardOverview: "总览",
+       dashboardToday: "今日",
+       dashboardMemories: "记忆",
+       dashboardContext: "上下文库",
+       dashboardGraph: "知识图谱",
+       dashboardActivity: "活动",
+       dashboardLifecycle: "生命周期",
+       dashboardReview: "审阅",
+       dashboardSearch: "搜索记忆",
+       dashboardSearchPlaceholder: "按内容搜索",
+       dashboardAll: "全部",
+       dashboardWorking: "工作记忆",
+       dashboardEpisodic: "情景记忆",
+       dashboardRefresh: "刷新数据",
+       dashboardLoadMore: "加载更多",
+       dashboardLoading: "正在读取本地记忆…",
+       dashboardEmpty: "没有匹配的本地记忆",
+       dashboardLoadFail: "无法读取本地记忆",
+       dashboardBank: "当前 Bank",
+       dashboardTotal: "记忆总数",
+       dashboardTriples: "知识三元组",
+       dashboardConsolidations: "整合记录",
+       dashboardSource: "来源",
+       dashboardSession: "会话",
+       dashboardScope: "作用域",
+       dashboardCreated: "记录时间",
+       dashboardDetails: "查看详情",
+       dashboardCloseDetails: "关闭详情",
+       dashboardNoFeature: "当前记忆库不提供此视图所需的数据",
+       dashboardReviewHint: "只读审阅：不会修改记忆状态或内容",
     },
     en: {
       nav: "Mnemosyne",
@@ -298,6 +331,39 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       depsReindexFail: "Reindex failed",
       depsReindexRunning: "Reindex already running in the background",
       depsReindexBlocked: "Save or discard unsaved changes before reindexing",
+      dashboardOpen: "Open memory dashboard",
+      dashboardTitle: "Memory dashboard",
+      dashboardReadOnly: "Read only",
+      dashboardOverview: "Overview",
+      dashboardToday: "Today",
+      dashboardMemories: "Memories",
+      dashboardContext: "Context bank",
+      dashboardGraph: "Knowledge graph",
+      dashboardActivity: "Activity",
+      dashboardLifecycle: "Lifecycle",
+      dashboardReview: "Review",
+      dashboardSearch: "Search memories",
+      dashboardSearchPlaceholder: "Search content",
+      dashboardAll: "All",
+      dashboardWorking: "Working memory",
+      dashboardEpisodic: "Episodic memory",
+      dashboardRefresh: "Refresh data",
+      dashboardLoadMore: "Load more",
+      dashboardLoading: "Reading local memories…",
+      dashboardEmpty: "No matching local memories",
+      dashboardLoadFail: "Unable to read local memories",
+      dashboardBank: "Current bank",
+      dashboardTotal: "Total memories",
+      dashboardTriples: "Knowledge triples",
+      dashboardConsolidations: "Consolidations",
+      dashboardSource: "Source",
+      dashboardSession: "Session",
+      dashboardScope: "Scope",
+      dashboardCreated: "Recorded",
+      dashboardDetails: "View details",
+      dashboardCloseDetails: "Close details",
+      dashboardNoFeature: "This memory bank does not provide the data for this view",
+      dashboardReviewHint: "Read-only review does not change memory state or content",
     },
   };
 
@@ -455,6 +521,9 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-footer{list-style:none;text-align:center;padding:12px 16px 4px}' +
     '.mn-footer-actions{display:flex;justify-content:center;margin-bottom:10px}' +
     '.mn-footer-hint{font-size:12px;color:var(--dsw-alias-label-tertiary);line-height:1.6;margin:0}' +
+    '.mn-upstream{height:100%;min-height:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-2)}' +
+    '.mn-upstream-frame{flex:1 1 auto;min-height:0;position:relative}' +
+    '.mn-upstream-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent}' +
     // Settings-nav brain icon: DSH's settings shell only projects id/order/label
     // from a settings.section registration and picks the nav glyph from a closed
     // list of built-in ids (unknown ids fall back to a gear). We mark our own nav
@@ -476,7 +545,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
   }
 
   function MnemosynePanel(props) {
-    const { t, scope, locale } = props;
+    const { t, scope, locale, openDashboard } = props;
     installStyles();
 
     // Re-render when the user switches the app language in Settings → General.
@@ -1037,6 +1106,9 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
               ),
             )
           : null,
+        openDashboard ? h("div", { className: "mn-actions" },
+          h("button", { type: "button", className: "mn-btn mn-btn-save", onClick: openDashboard }, t("dashboardOpen")),
+        ) : null,
         // Dependency checks: one row per dep, install button on the right
         h("div", { className: "mn-deps" },
           h("div", { className: "mn-deps-title" }, t("depsTitle")),
@@ -1159,6 +1231,45 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     );
   }
 
+  function BrainIcon({ size = 20 } = {}) {
+    return h("svg", {
+      width: size, height: size, viewBox: "0 0 24 24", fill: "currentColor",
+      "aria-hidden": true, focusable: false,
+    },
+      h("path", { d: "M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" }),
+      h("path", { d: "M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" }),
+      h("path", { d: "M12 5v13" }),
+    );
+  }
+
+  function UpstreamDashboard(props) {
+    const { t, locale } = props;
+    installStyles();
+    const localeSubscribe = useMemo(
+      () => (locale && typeof locale.subscribe === "function" ? locale.subscribe.bind(locale) : () => () => {}),
+      [locale],
+    );
+    const localeGetSnapshot = useMemo(
+      () => (locale && typeof locale.getSnapshot === "function" ? locale.getSnapshot.bind(locale) : () => ({ active: "en" })),
+      [locale],
+    );
+    const localeSnapshot = useSyncExternalStore(localeSubscribe, localeGetSnapshot);
+    const lang = localeSnapshot?.active === "zh" ? "zh" : "en";
+    const src = `/mnemosyne/dashboard/?lang=${lang}`;
+    return h("section", { className: "mn-upstream", "aria-label": t("dashboardTitle") },
+      h("div", { className: "mn-upstream-frame" },
+        h("iframe", {
+          key: lang,
+          title: t("dashboardTitle"),
+          src,
+          loading: "eager",
+          referrerPolicy: "no-referrer",
+          style: { width: "100%", height: "100%", border: 0, display: "block", background: "transparent" },
+        }),
+      ),
+    );
+  }
+
   const SETTINGS_NAV_MARKER = "data-dsh-mnemosyne-settings-nav";
 
   /**
@@ -1198,6 +1309,39 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     ctx.effect(() => ctx.locale.register(NS, LOCALE), "dsh-mnemosyne: dictionaries");
     const t = ctx.locale.bind(NS);
     const scope = ctx.settingsScope.bind({ namespace: "mnemosyne" });
+    // Better Sidebar is an optional client-only service. Registration is lazy:
+    // ctx.inject waits for the provider (the sidebar's client may initialize
+    // after this plugin), while the eager ctx.get path covers hosts where the
+    // service already exists. Without the service the existing Settings
+    // surface stays fully available and no dashboard action is rendered.
+    let openDashboard = null;
+    let dashboardTabRegistered = false;
+    const registerSidebarDashboard = (sidebar) => {
+      if (!sidebar || typeof sidebar.registerTab !== "function") return;
+      dashboardTabRegistered = true;
+      openDashboard = typeof sidebar.openTab === "function"
+        ? () => sidebar.openTab({ type: "dsh-mnemosyne:memory-dashboard" })
+        : null;
+      const dispose = sidebar.registerTab({
+        id: "dsh-mnemosyne:memory-dashboard",
+        title: () => t("dashboardTitle"),
+        order: 55,
+        single: true,
+        icon: (size) => h(BrainIcon, { size }),
+        component: (props) => h(UpstreamDashboard, { ...props, t, locale: ctx.locale }),
+      });
+      return () => { dashboardTabRegistered = false; if (typeof dispose === "function") dispose(); };
+    };
+    if (typeof ctx.inject === "function") {
+      ctx.inject(["betterSidebar"], (sctx) => {
+        if (!sctx || !sctx.betterSidebar || dashboardTabRegistered) return;
+        sctx.effect(() => registerSidebarDashboard(sctx.betterSidebar) || undefined, "dsh-mnemosyne: register memory dashboard tab");
+      });
+    }
+    const earlySidebar = typeof ctx.get === "function" ? ctx.get("betterSidebar") : null;
+    if (earlySidebar && !dashboardTabRegistered) {
+      ctx.effect(() => registerSidebarDashboard(earlySidebar) || undefined, "dsh-mnemosyne: register memory dashboard tab");
+    }
 
     // Inject styles up front (idempotent) so the settings-nav brain icon rule
     // is present before the settings dialog opens — otherwise the icon only
@@ -1218,7 +1362,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           order: 50,
           label: () => t("nav"),
           locale: NS,
-          inject: () => ({ t, scope, locale: ctx.locale }),
+          inject: () => ({ t, scope, locale: ctx.locale, openDashboard }),
         },
         (props) => h("ul", { style: { listStyle: "none", margin: 0, padding: 0 } },
           h(MnemosynePanel, props),

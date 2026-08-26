@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
@@ -28,6 +29,8 @@ import {
   extractMessageText,
   extractLastUserText,
   parseStats,
+  parseDashboardListParams,
+  readDashboardData,
   detectEmbeddingDeps,
   startReindex,
   getReindexStatus,
@@ -534,6 +537,30 @@ describe("panel HTTP routes", () => {
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "dsh-mnem-route-")); });
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
+  function createDashboardDb(dataDir) {
+    const db = join(dataDir, "mnemosyne.db");
+    const script = [
+      "import sqlite3, sys",
+      "db = sqlite3.connect(sys.argv[1])",
+      "db.executescript(\"\"\"",
+      "CREATE TABLE working_memory (id TEXT PRIMARY KEY, content TEXT, source TEXT, timestamp TEXT, session_id TEXT, importance REAL, created_at TEXT, scope TEXT);",
+      "CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT, source TEXT, timestamp TEXT, session_id TEXT, importance REAL, created_at TEXT);",
+      "CREATE TABLE episodic_memory (id TEXT PRIMARY KEY, content TEXT, source TEXT, timestamp TEXT, session_id TEXT, importance REAL, created_at TEXT, scope TEXT);",
+      "CREATE TABLE triples (id TEXT PRIMARY KEY, subject TEXT, predicate TEXT, object TEXT, source TEXT, confidence REAL, created_at TEXT);",
+      "CREATE TABLE consolidation_log (id TEXT PRIMARY KEY, session_id TEXT, items_consolidated INTEGER, summary_preview TEXT, created_at TEXT);",
+      "INSERT INTO working_memory VALUES ('w1', 'Alpha project preference', 'dsh', '2026-08-25T10:00:00', 'dsh_session-1', 0.8, '2026-08-25T10:00:00', 'session');",
+      "INSERT INTO memories VALUES ('w1', 'Alpha project preference', 'dsh', '2026-08-25T10:00:00', 'dsh_session-1', 0.8, '2026-08-25T10:00:00');",
+      "INSERT INTO episodic_memory VALUES ('e1', 'Beta event note', 'dsh', '2026-08-24T10:00:00', 'dsh_session-1', 0.6, '2026-08-24T10:00:00', 'global');",
+      "INSERT INTO triples VALUES ('t1', 'Alpha', 'prefers', 'local', 'dsh', 0.9, '2026-08-25T10:00:00');",
+      "INSERT INTO consolidation_log VALUES ('c1', 'dsh_session-1', 2, 'Merged two related facts', '2026-08-25T11:00:00');",
+      "\"\"\")",
+      "db.commit()",
+      "db.close()",
+    ].join("\n");
+    execFileSync("python3", ["-c", script, db]);
+    return db;
+  }
+
   function createRouteCtx(config) {
     let handler = null;
     const ctx = {
@@ -624,11 +651,150 @@ describe("panel HTTP routes", () => {
       const res = {
         status: null,
         writeHead(code) { this.status = code; },
-        end(payload) { resolve({ status: this.status, body: payload ? JSON.parse(payload) : null }); },
+        end(payload) {
+          let body = null;
+          if (payload) {
+            try { body = JSON.parse(payload); }
+            catch { body = String(payload); }
+          }
+          resolve({ status: this.status, body });
+        },
       };
       handler(req, res);
     });
   }
+
+  it("clamps dashboard paging and search parameters", () => {
+    assert.deepEqual(parseDashboardListParams("/mnemosyne/dashboard/memories?limit=9999&offset=-5&q=" + "x".repeat(200) + "&kind=episodic"), {
+      limit: 100, offset: 0, query: "x".repeat(160), kind: "episodic",
+      source: "", scope: "", session_id: "", veracity: "", degradation_tier: "",
+      contaminated_only: false, degraded_only: false, due_for_degradation: false,
+      status: "active", sort: "recent",
+    });
+    assert.deepEqual(parseDashboardListParams("/mnemosyne/dashboard/memories?limit=30&offset=2&source=dsh&scope=session&session_id=dsh_session-1&veracity=stated&degradation_tier=2&contaminated_only=1&degraded_only=1&due_for_degradation=1&status=expired&sort=oldest"), {
+      limit: 30, offset: 2, query: "", kind: "all",
+      source: "dsh", scope: "session", session_id: "dsh_session-1", veracity: "stated", degradation_tier: "2",
+      contaminated_only: true, degraded_only: true, due_for_degradation: true,
+      status: "expired", sort: "oldest",
+    });
+    assert.deepEqual(parseDashboardListParams("/mnemosyne/dashboard/memories?limit=0&offset=20000&kind=unsafe"), {
+      limit: 1, offset: 10000, query: "", kind: "all",
+      source: "", scope: "", session_id: "", veracity: "", degradation_tier: "",
+      contaminated_only: false, degraded_only: false, due_for_degradation: false,
+      status: "active", sort: "recent",
+    });
+  });
+
+  it("serves bounded read-only dashboard data from the active bank", async () => {
+    createDashboardDb(dir);
+    const summary = await readDashboardData(dir, "summary");
+    assert.deepEqual(summary.counts, { working: 1, episodic: 1, triples: 1, consolidations: 1, total: 2 });
+    const memories = await readDashboardData(dir, "memories", { query: "alpha", limit: 5 });
+    assert.equal(memories.items.length, 1);
+    assert.equal(memories.items[0].id, "w1");
+    const filteredMemories = await readDashboardData(dir, "memories", {
+      kind: "working", source: "dsh", scope: "session", session_id: "dsh_session-1", limit: 5,
+    });
+    assert.deepEqual(filteredMemories.items.map((item) => item.id), ["w1"]);
+    const nonMatchingMemories = await readDashboardData(dir, "memories", { source: "other", limit: 5 });
+    assert.deepEqual(nonMatchingMemories.items, []);
+    const sourceBreakdown = await readDashboardData(dir, "breakdown", { field: "source" });
+    assert.deepEqual(sourceBreakdown.items, [{ value: "dsh", count: 2 }]);
+    const triples = await readDashboardData(dir, "triples", { query: "local" });
+    assert.equal(triples.items[0].id, "t1");
+    const consolidations = await readDashboardData(dir, "consolidations");
+    assert.equal(consolidations.items[0].id, "c1");
+  });
+
+  it("registers GET-only dashboard routes behind the same-origin read fence", async () => {
+    createDashboardDb(dir);
+    const handlers = createRouteCtxAll({ dataDir: dir });
+    for (const path of ["summary", "memories", "triples", "consolidations"]) {
+      assert.equal(typeof handlers[`/mnemosyne/dashboard/${path}`], "function", `${path} route registered`);
+    }
+    const memoriesReq = jsonReq("GET");
+    memoriesReq.url = "/mnemosyne/dashboard/memories?q=alpha&limit=5";
+    const memories = await callRoute(handlers["/mnemosyne/dashboard/memories"], memoriesReq);
+    assert.equal(memories.status, 200);
+    assert.equal(memories.body.ok, true);
+    assert.equal(memories.body.data.items[0].id, "w1");
+    const filtered = await callRoute(handlers["/mnemosyne/dashboard/memories"], (() => {
+      const req = jsonReq("GET");
+      req.url = "/mnemosyne/dashboard/memories?kind=working&source=dsh&scope=session&session_id=dsh_session-1&limit=5";
+      return req;
+    })());
+    assert.deepEqual(filtered.body.data.items.map((item) => item.id), ["w1"]);
+
+    const write = await callRoute(handlers["/mnemosyne/dashboard/summary"], jsonReq("POST", {}));
+    assert.equal(write.status, 405);
+    const crossSite = await callRoute(handlers["/mnemosyne/dashboard/summary"], jsonReq("GET", undefined, { "sec-fetch-site": "cross-site" }));
+    assert.equal(crossSite.status, 403);
+  });
+
+  it("serves the upstream dashboard API as read-only same-origin JSON", async () => {
+    createDashboardDb(dir);
+    const handlers = createRouteCtxAll({ dataDir: dir });
+    const apiReq = (path) => {
+      const req = jsonReq("GET");
+      req.url = path;
+      return req;
+    };
+    const stats = await callRoute(handlers["/mnemosyne/dashboard/api"], apiReq("/mnemosyne/dashboard/api/stats"));
+    assert.equal(stats.status, 200);
+    assert.equal(stats.body.counts.working_memory, 1);
+    assert.equal(stats.body.auth_enabled, undefined);
+
+    const memory = await callRoute(handlers["/mnemosyne/dashboard/api"], apiReq("/mnemosyne/dashboard/api/memory?id=w1"));
+    assert.equal(memory.status, 200);
+    assert.equal(memory.body.item.id, "w1");
+
+    const search = await callRoute(handlers["/mnemosyne/dashboard/api"], apiReq("/mnemosyne/dashboard/api/search?q=alpha"));
+    assert.equal(search.status, 200);
+    assert.equal(search.body.memories.length, 1);
+
+    const graph = await callRoute(handlers["/mnemosyne/dashboard/api"], apiReq("/mnemosyne/dashboard/api/graph?limit=300"));
+    assert.equal(graph.status, 200);
+    assert.ok(graph.body.nodes.some((node) => node.label === "Alpha"));
+
+    const auth = await callRoute(handlers["/mnemosyne/dashboard/api"], apiReq("/mnemosyne/dashboard/api/auth/status"));
+    assert.equal(auth.status, 200);
+    assert.equal(auth.body.auth_enabled, false);
+
+    const review = await callRoute(handlers["/mnemosyne/dashboard/api"], apiReq("/mnemosyne/dashboard/api/review"));
+    assert.equal(review.body.has_more, false);
+
+    const apiWrite = await callRoute(handlers["/mnemosyne/dashboard/api"], jsonReq("POST", {}));
+    assert.equal(apiWrite.status, 405);
+    const apiCrossSite = await callRoute(handlers["/mnemosyne/dashboard/api"], jsonReq("GET", undefined, { "sec-fetch-site": "cross-site" }));
+    assert.equal(apiCrossSite.status, 403);
+  });
+
+  it("serves only vendored dashboard static assets under the dashboard prefix", async () => {
+    const handlers = createRouteCtxAll({ dataDir: dir });
+    const shellReq = jsonReq("GET");
+    shellReq.url = "/mnemosyne/dashboard";
+    const shell = await callRoute(handlers["/mnemosyne/dashboard"], shellReq);
+    assert.equal(shell.status, 200);
+    assert.ok(shell.body && shell.body.includes("<!doctype html>") || !!shell.body, "dashboard shell served");
+    // A direct (top-level) tab open from the local host is permitted…
+    const topLevelReq = jsonReq("GET", undefined, { "sec-fetch-site": "none" });
+    topLevelReq.url = "/mnemosyne/dashboard/";
+    const topLevel = await callRoute(handlers["/mnemosyne/dashboard/"], topLevelReq);
+    assert.equal(topLevel.status, 200);
+    // …but cross-site embedding fetches stay blocked.
+    const crossReq = jsonReq("GET", undefined, { "sec-fetch-site": "cross-site" });
+    crossReq.url = "/mnemosyne/dashboard/";
+    const cross = await callRoute(handlers["/mnemosyne/dashboard/"], crossReq);
+    assert.equal(cross.status, 403);
+    const missingReq = jsonReq("GET");
+    missingReq.url = "/mnemosyne/dashboard/static/";
+    const missing = await callRoute(handlers["/mnemosyne/dashboard/static"], missingReq);
+    assert.equal(missing.status, 404);
+    const req = jsonReq("GET");
+    req.url = "/mnemosyne/dashboard/static/../../../etc/passwd";
+    const blocked = await callRoute(handlers["/mnemosyne/dashboard/static"], req);
+    assert.equal(blocked.status, 404);
+  });
 
   it("reindex rejects invalid JSON instead of starting a default job", async () => {
     const reindex = createRouteCtxAll({ dataDir: dir, cli: "definitely-not-a-cli-xyz" })["/mnemosyne/reindex"];

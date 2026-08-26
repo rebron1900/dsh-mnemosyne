@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mnemosyne Dashboard</title>
+  <link rel="icon" href="/mnemosyne/dashboard/static/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/mnemosyne/dashboard/static/brand-fonts.css" />
+  <link rel="stylesheet" href="/mnemosyne/dashboard/static/style.css?v=stream-v2" />
+  <style>.dsh-hidden-nav{display:none !important} #settings,#review,#memoryPalace,#constellation{display:none !important} body{padding:0;margin:0}@media (max-width:700px){html,body{overflow-x:hidden}.shell{display:block}.sidebar{position:sticky;top:0;z-index:30;height:auto;padding:0;border-right:0;border-bottom:1px solid var(--line)}.mobile-topbar{height:48px;display:flex;align-items:center;gap:8px;width:100%;min-width:0;position:relative;padding:0 8px 0 10px;box-sizing:border-box}.compact-brand{margin:0;gap:9px;min-width:0;max-width:100%;flex:1 1 auto;overflow:hidden}.compact-brand>div:last-child{min-width:0}.compact-brand .brand-mark{width:30px !important;flex-basis:30px !important;font-size:23px !important;height:32px}.compact-brand .brand-name{font-size:16px;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.compact-brand .brand-sub{font-size:8.5px;line-height:1.1;letter-spacing:.07em;white-space:nowrap;overflow:hidden;text-overflow:clip}.mobile-topbar-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}.a:hover,.a:focus{outline:none}.topbar-theme-toggle,.mobile-menu-toggle{width:36px;height:36px;padding:0;justify-content:center;border:1px solid var(--line);border-radius:12px;background:var(--glass-bg);min-width:0}.topbar-theme-toggle strong{display:none}.topbar-theme-toggle span{font-size:14px}.mobile-menu-toggle{display:grid;place-items:center;font-size:20px;font-weight:800;line-height:1}.desktop-brand{display:none}.sidebar-menu{position:absolute;top:100%;left:0;right:0;z-index:120;display:none;margin:0;padding:10px 12px 14px;border:1px solid var(--line2);border-top:0;border-radius:0 0 18px 18px;background:var(--panel2);box-shadow:0 22px 60px rgba(0,0,0,.34);backdrop-filter:blur(18px);overflow:auto;max-height:min(70vh,520px)}body.mobile-menu-open .sidebar-menu{display:block !important;visibility:visible}.menu-search{display:flex;gap:8px;align-items:center;margin:4px 0 10px;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--glass-bg)}.menu-search input{flex:1;min-width:0;border:0;background:transparent}.menu-search input:focus{outline:none}.menu-search button{flex:0 0 auto;min-height:34px;border-radius:10px;padding:0 12px}.theme-switch{display:none}.hero{display:none}main{padding:16px 14px 26px}.app-footer{padding:14px 14px 24px;text-align:center;line-height:1.7}.breakdowns{grid-template-columns:1fr;gap:10px}.breakdown-card{padding:13px}.toolbar{padding:10px;gap:8px}.toolbar input,.toolbar select{min-width:0;width:100%;max-width:100%}nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}nav button{justify-content:flex-start;padding:8px 10px;font-size:13px}.drawer{right:10px;top:10px;bottom:10px;left:10px;width:auto;max-width:none;border-radius:18px;padding:16px}.table-wrap{overflow:auto}.table-wrap table{min-width:560px}.graph-wrap{overflow:auto}.graph-wrap #graphSvg{min-width:560px}.profile-grid{grid-template-columns:1fr}.constellation-layout{grid-template-columns:1fr}.constellation-wrap{height:400px;min-height:400px}.section-head h2{font-size:20px}.section-head span{font-size:9px;letter-spacing:.08em}}@media (max-width:620px){.cards,.memory-grid{grid-template-columns:1fr !important}.cards{gap:10px}.card{border-radius:16px;padding:15px 14px 17px}.card .num{font-size:32px;line-height:1.15}.card .label{font-size:10px;letter-spacing:.10em;line-height:1.5}.item{border-radius:14px;padding:13px;min-height:116px}.timeline .item{margin-left:10px}.timeline .item:after{left:-12px;top:16px}}@media (max-width:460px){.mobile-topbar{padding:0 8px}.compact-brand{gap:8px}.compact-brand .brand-mark{width:30px !important;flex-basis:30px !important;font-size:22px !important}.compact-brand .brand-name{font-size:15px}.topbar-theme-toggle,.mobile-menu-toggle{width:34px;height:34px;border-radius:11px}.cards .num{font-size:28px}.section-head h2{font-size:18px}}</style>
+</head>
+<body>
+  <div class="aurora aurora-one"></div>
+  <div class="aurora aurora-two"></div>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="mobile-topbar">
+        <div class="mobile-topbar-inner">
+          <div class="brand compact-brand brand-home">
+            <div>
+              <div class="brand-name">Mnemosyne</div>
+              <div class="brand-sub">Hermes Memory</div>
+            </div>
+          </div>
+          <div class="mobile-topbar-actions">
+            <button id="mobileRefreshButton" class="topbar-refresh-toggle" aria-label="Refresh dashboard" title="Refresh dashboard">↻</button>
+            <button id="mobileThemeToggle" class="theme-toggle topbar-theme-toggle" aria-label="Toggle theme"><span class="theme-icon" id="mobileThemeIcon">☾</span><strong class="theme-label" id="mobileThemeLabel">Dark</strong></button>
+            <button id="mobileMenuToggle" class="mobile-menu-toggle" aria-expanded="false" aria-label="Open menu">☰</button>
+          </div>
+        </div>
+      </div>
+      <div id="sidebarMenu" class="sidebar-menu">
+      <div class="brand desktop-brand brand-home">
+        <div class="brand-mark">M</div>
+        <div>
+          <div class="brand-name">Mnemosyne</div>
+          <div class="brand-sub">Hermes Memory</div>
+        </div>
+      </div>
+      <div class="menu-search glass-mini">
+        <input id="menuSearchQuery" placeholder="Search memory…" />
+        <button id="menuSearchButton" class="primary" aria-label="Search memory">⌕</button>
+      </div>
+      <nav>
+        <button data-tab="overview" class="active"><span>OV</span>Overview</button>
+        <button data-tab="today"><span>TD</span>Today</button>
+        <button data-tab="visualiser"><span>3D</span>Visualiser</button>
+        <button data-tab="palace" class="dsh-hidden-nav" aria-hidden="true" tabindex="-1"><span>♜</span>Mnemosyne Labyrinth</button>
+        <button data-tab="visualiserlegacy" class="dsh-hidden-nav" aria-hidden="true" tabindex="-1"><span>✺</span>Visualiser Legacy</button>
+        <button data-tab="review" class="dsh-hidden-nav" aria-hidden="true" tabindex="-1"><span>RV</span>Review</button>
+        <button data-tab="memories"><span>MM</span>Memories</button>
+        <button data-tab="profile"><span>CB</span>Context Bank</button>
+        <button data-tab="lifecycle"><span>LC</span>Lifecycle</button>
+        <button data-tab="graph"><span>KG</span>Knowledge Graph</button>
+        <button data-tab="memoria"><span>MR</span>MEMORIA</button>
+        <button data-tab="activity"><span>HS</span>History</button>
+      </nav>
+      <div class="theme-switch glass-mini">
+        <span>Theme</span>
+        <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme"><span class="theme-icon" id="themeIcon">☾</span><strong class="theme-label" id="themeLabel">Dark</strong></button>
+      </div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="hero">
+        <div>
+          <div class="eyebrow">Hermes memory console</div>
+          <h1>Private memory, cleanly mapped.</h1>
+          <p>Search, review, and trace working memories, summaries, triples, and consolidation history from one local dashboard.</p>
+        </div>
+        <div class="status-card">
+          <div class="status-label">Database</div>
+          <div id="dbPath" class="db-path">loading…</div>
+          <div id="bootError" class="state-card state-error hidden" role="alert" aria-live="polite"></div>
+        </div>
+      </header>
+
+      <main>
+        <section id="overview" class="tab active">
+          <div id="cards" class="cards"></div>
+          <div class="breakdowns">
+            <div class="breakdown-card glass"><div class="breakdown-title">Trust mix</div><div id="veracityBreakdown"></div></div>
+            <div class="breakdown-card glass"><div class="breakdown-title">Lifecycle</div><div id="degradationBreakdown"></div></div>
+            <div class="breakdown-card glass"><div class="breakdown-title">Sources</div><div id="sourceBreakdown"></div></div>
+            <div class="breakdown-card glass"><div class="breakdown-title">Scopes</div><div id="scopeBreakdown"></div></div>
+            <div class="breakdown-card glass"><div class="breakdown-title">Top sessions</div><div id="sessionBreakdown"></div></div>
+          </div>
+          <div class="quick-actions glass">
+            <button data-jump="search">Search everything</button>
+            <button data-jump="memories">Browse memories</button>
+            <button data-jump="timelineView">Latest activity</button>
+            <button data-jump="graph">Open graph</button>
+          </div>
+          <div class="section-head"><h2>Live memory stream</h2><span>25 latest memories</span></div>
+          <div id="liveMemoryStream" class="list memory-grid" aria-live="polite"></div>
+          <div id="liveMemorySentinel" class="live-memory-sentinel" aria-hidden="true"></div>
+          <p id="liveMemoryStatus" class="muted live-memory-status">Scroll to load older memories.</p>
+        </section>
+
+        <section id="today" class="tab">
+          <div class="section-head"><h2>Today in memory</h2><span>read-only daily digest</span></div>
+          <div id="todayCards" class="cards"></div>
+          <div class="breakdowns compact-breakdowns">
+            <div class="breakdown-card glass"><div class="breakdown-title">Top entities</div><div id="todayEntities"></div></div>
+            <div class="breakdown-card glass"><div class="breakdown-title">Trust mix</div><div id="todayVeracity"></div></div>
+            <div class="breakdown-card glass"><div class="breakdown-title">Lifecycle</div><div id="todayDegradation"></div></div>
+            <div class="breakdown-card glass"><div class="breakdown-title">Sources</div><div id="todaySources"></div></div>
+            <div class="breakdown-card glass"><div class="breakdown-title">Sessions</div><div id="todaySessions"></div></div>
+          </div>
+          <div class="section-tabs glass" data-section="today">
+            <button data-panel="todayAdded" class="active">Added</button>
+            <button data-panel="todayRecalled">Recalled</button>
+            <button data-panel="todayTriples">Triples</button>
+            <button data-panel="todayConsolidations">Consolidations</button>
+          </div>
+          <div id="todayAdded" class="subpanel active"><div class="list memory-grid"></div></div>
+          <div id="todayRecalled" class="subpanel"><div class="list memory-grid"></div></div>
+          <div id="todayTriples" class="subpanel"><div class="list memory-grid"></div></div>
+          <div id="todayConsolidations" class="subpanel"><div class="list memory-grid"></div></div>
+        </section>
+
+        <section id="profile" class="tab">
+          <div class="section-head"><h2>Context Bank</h2><span>inferred context from active memory</span></div>
+          <div id="patternInsights" class="glass pattern-panel">
+            <div class="section-head mini"><h2>Pattern insights</h2><span>Powered by Mnemosyne PatternDetector</span></div>
+            <div id="patternSummary" class="pattern-summary"></div>
+            <div class="pattern-grid">
+              <div><h3>Content patterns</h3><div id="patternContent" class="pattern-bars"></div></div>
+              <div><h3>Temporal patterns</h3><div id="patternTemporal" class="pattern-bars"></div></div>
+              <div><h3>Sequence patterns</h3><div id="patternSequence" class="pattern-bars"></div></div>
+            </div>
+          </div>
+          <div id="contextDomains" class="glass pattern-panel">
+            <div class="section-head mini"><h2>Context domains</h2><span>Dashboard taxonomy</span></div>
+            <div class="pattern-grid">
+              <div><h3>Domains</h3><div id="contextDomainBars" class="pattern-bars"></div></div>
+              <div><h3>Origins</h3><div id="patternOrigins" class="pattern-bars"></div></div>
+              <div><h3>Memory types</h3><div id="patternTypes" class="pattern-bars"></div></div>
+            </div>
+          </div>
+          <div id="profileGrid" class="profile-grid"></div>
+        </section>
+
+        <section id="review" class="tab">
+          <div class="section-head"><h2>Trust Review</h2><span>triage selected memories — confirm, correct, or expire only what you choose</span></div>
+          <div id="reviewCards" class="cards review-cards"></div>
+          <div class="toolbar glass review-selector-bar">
+            <label for="reviewQueueSelect" class="muted">Review queue</label>
+            <select id="reviewQueueSelect"></select>
+            <input id="reviewSearchQuery" placeholder="Search this queue…" />
+            <label class="range-filter" for="reviewMinImportance"><span>Min importance</span> <strong class="range-filter-value" id="reviewMinImportanceValue">any</strong></label>
+            <input id="reviewMinImportance" type="range" min="0" max="1" step="0.05" value="0" />
+            <button id="reviewApplyFilters" class="primary">Apply filters</button>
+            <button id="reviewClearFilters">Clear</button>
+            <span id="reviewQueueCount" class="muted">0 listed</span>
+          </div>
+          <div id="reviewBulkBar" class="bulk-bar review-bulk-bar glass hidden">
+            <label class="bulk-select-control"><input id="reviewSelectAll" type="checkbox" /> <span>Select listed</span></label>
+            <span id="reviewSelectionStatus" class="bulk-selection-status muted">0 selected</span>
+            <button id="reviewConfirm" class="drawer-action primary">Confirm selected</button>
+            <button id="reviewVeracity" class="drawer-action">Set trust</button>
+            <button id="reviewExpiry" class="drawer-action">Set expiry</button>
+            <button id="reviewExpire" class="drawer-action warn">Expire selected</button>
+            <button id="reviewClear" class="drawer-action">Clear selection</button>
+          </div>
+          <div id="reviewQueues" class="review-queues"></div>
+          <div class="toolbar glass review-load-bar">
+            <button id="reviewLoadMore" class="primary">Load 100 more</button>
+          </div>
+        </section>
+
+        <section id="lifecycle" class="tab">
+          <div class="section-head"><h2>Lifecycle</h2><span>hot / warm / cold memory degradation dashboard</span></div>
+          <div id="lifecycleThresholds" class="quick-actions glass"></div>
+          <div id="lifecycleCards" class="cards lifecycle-cards"></div>
+          <div id="lifecycleQueues" class="review-queues lifecycle-queues"></div>
+        </section>
+
+        <section id="constellation" class="tab">
+          <div class="section-head"><h2>Visualiser Legacy</h2><span>memory maps + neural activation views</span></div>
+          <div class="section-tabs visualiser-tabs glass" aria-label="Visualiser mode">
+            <button id="visualiserConstellationTab" data-visualiser="constellation" class="active">Constellation</button>
+            <button id="visualiserNeuralTab" data-visualiser="neural">Neural Map</button>
+          </div>
+          <div class="toolbar glass">
+            <button id="constellationRefresh" class="primary">Refresh visualiser</button>
+            <button id="constellationReset">Reset view</button>
+            <button id="constellationPanMode">Pan mode</button>
+            <button id="constellationPause">Pause rotation</button>
+            <button id="constellationFullscreen">Fullscreen</button>
+            <span id="visualiserHelp" class="muted">Drag to rotate · Pan mode/Shift-drag to pan · wheel/pinch to zoom.</span>
+          </div>
+          <div class="constellation-layout">
+            <div class="constellation-wrap"><canvas id="constellationCanvas" aria-label="Interactive 3D memory constellation"></canvas><button id="constellationExitFullscreen" class="fullscreen-exit" aria-label="Exit fullscreen">×</button><div class="constellation-legend" aria-label="Constellation legend"><span><i class="legend-dot entity"></i>Entity/topic</span><span><i class="legend-dot memory"></i>Memory</span><span><i class="legend-line"></i>Link</span></div></div>
+            <aside id="constellationInspector" class="graph-inspector glass">
+              <div class="inspector-kicker">Constellation inspector</div>
+              <h3>Nothing selected</h3>
+              <p class="muted">Pick a star, memory, or link to inspect the underlying read-only source.</p>
+            </aside>
+          </div>
+          <div id="constellationClusters" class="cluster-row"></div>
+        </section>
+
+        <section id="visualiser3d" class="tab">
+          <div class="section-head"><h2>Visualiser</h2><span>memory maps + neural activation views</span></div>
+          <div class="section-tabs visualiser-tabs glass" aria-label="Visualiser mode">
+            <button id="threeConstellationTab" data-three-mode="constellation" class="active">Constellation</button>
+            <button id="threeNeuralTab" data-three-mode="neural">Neural Map</button>
+          </div>
+          <div class="toolbar glass">
+            <button id="threeRefresh" class="primary">Refresh visualiser</button>
+            <button id="threeReset">Reset view</button>
+            <button id="threePanMode">Pan mode</button>
+            <button id="threePause">Pause rotation</button>
+            <button id="threeFullscreen">Fullscreen</button>
+            <span id="threeHelp" class="muted">Drag to rotate · Pan mode/Shift-drag to pan · wheel/pinch to zoom.</span>
+          </div>
+          <div class="three-layout">
+            <div id="threeViewport" class="three-viewport glass" aria-label="Interactive 3D memory visualiser">
+              <button id="threeExitFullscreen" class="fullscreen-exit" aria-label="Exit fullscreen">×</button>
+              <div id="threeLabels" class="three-labels"></div>
+              <div id="threeLegend" class="constellation-legend three-legend"><span><i class="legend-dot entity"></i>Entity/topic</span><span><i class="legend-dot memory"></i>Memory</span><span><i class="legend-line"></i>Link</span></div>
+            </div>
+            <aside id="threeInspector" class="graph-inspector glass">
+              <div class="inspector-kicker">Constellation inspector</div>
+              <h3>Nothing selected</h3>
+              <p class="muted">Pick a star, memory, or link to inspect the underlying read-only source.</p>
+            </aside>
+          </div>
+          <div id="threeClusters" class="cluster-row"></div>
+        </section>
+
+        <section id="memoryPalace" class="tab">
+          <div class="section-head"><h2>Mnemosyne Labyrinth</h2><span>artifact rooms + memory dungeon exploration</span></div>
+          <div class="toolbar glass">
+            <button id="palaceRefresh" class="primary">Refresh palace</button>
+            <button id="palaceReset">Reset diver</button>
+            <input id="palaceSearchQuery" placeholder="Beacon search…" />
+            <button id="palaceSearchButton">Set beacon</button>
+            <button id="palaceFullscreen">Fullscreen</button>
+            <span class="muted">WASD to move · drag to look · tap relics · artifact rooms · Memory Diver + Hammy drone</span>
+          </div>
+          <div class="palace-layout">
+            <div id="palaceViewport" class="palace-viewport glass" data-theme="labyrinth" aria-label="First-person Mnemosyne Labyrinth explorer">
+              <button id="palaceExitFullscreen" class="fullscreen-exit" aria-label="Exit fullscreen">×</button>
+              <div id="palaceLabels" class="three-labels palace-labels"></div>
+              <div class="palace-reticle" aria-hidden="true"></div>
+              <div class="palace-hud"><strong>Memory Diver</strong><span class="palace-zone-badge">The Archive Gate</span><span id="palaceHudStatus">loading labyrinth…</span><span>Hammy drone online</span><span class="palace-build">LAB v22</span></div>
+              <div id="palaceJoystick" class="palace-joystick" aria-label="Touch joystick"><span></span></div>
+            </div>
+            <aside id="palaceInspector" class="graph-inspector glass">
+              <div class="inspector-kicker">Mnemosyne Labyrinth</div>
+              <h3>Enter the Archive Gate</h3>
+              <p class="muted">Move between artifact rooms, inspect relics on pedestals, and use search to summon a golden thread.</p>
+            </aside>
+          </div>
+        </section>
+
+        <section id="memoria" class="tab">
+          <div class="section-head"><h2>MEMORIA</h2><span>structured fact extraction and retrieval</span></div>
+          <div class="section-tabs glass" data-section="memoria">
+            <button data-panel="memoriaOverview" class="active">Overview</button>
+            <button data-panel="memoriaFacts">Facts</button>
+            <button data-panel="memoriaTimelines">Timelines</button>
+            <button data-panel="memoriaInstructions">Instructions</button>
+            <button data-panel="memoriaKg">KG</button>
+            <button data-panel="memoriaPreferences">Preferences</button>
+          </div>
+          <div id="memoriaCards" class="cards"></div>
+          <div id="memoriaOverview" class="subpanel active">
+            <div class="breakdowns compact-breakdowns">
+              <div class="breakdown-card glass"><div class="breakdown-title">Table counts</div><div id="memoriaCounts"></div></div>
+              <div class="breakdown-card glass"><div class="breakdown-title">Top sessions</div><div id="memoriaSessions"></div></div>
+            </div>
+            <div id="memoriaTableCounts" class="list memory-grid"></div>
+          </div>
+          <div id="memoriaFacts" class="subpanel">
+            <div class="section-head mini"><h2>MEMORIA Facts</h2><span>extracted fact triples from conversations</span></div>
+            <div class="toolbar glass"><input id="memoriaFactsQuery" placeholder="Search facts…" /><button id="memoriaFactsSearch" class="primary">Search</button><span id="memoriaFactsCount" class="muted"></span></div>
+            <div id="memoriaFactsList" class="list timeline"></div>
+          </div>
+          <div id="memoriaTimelines" class="subpanel">
+            <div class="section-head mini"><h2>MEMORIA Timelines</h2><span>temporal event sequences</span></div>
+            <div class="toolbar glass"><input id="memoriaTimelinesQuery" placeholder="Search timelines…" /><button id="memoriaTimelinesSearch" class="primary">Search</button><span id="memoriaTimelinesCount" class="muted"></span></div>
+            <div id="memoriaTimelinesList" class="list timeline"></div>
+          </div>
+          <div id="memoriaInstructions" class="subpanel">
+            <div class="section-head mini"><h2>MEMORIA Instructions</h2><span>extracted instructions and guidelines</span></div>
+            <div class="toolbar glass"><input id="memoriaInstructionsQuery" placeholder="Search instructions…" /><button id="memoriaInstructionsSearch" class="primary">Search</button><span id="memoriaInstructionsCount" class="muted"></span></div>
+            <div id="memoriaInstructionsList" class="list timeline"></div>
+          </div>
+          <div id="memoriaKg" class="subpanel">
+            <div class="section-head mini"><h2>MEMORIA KG</h2><span>knowledge graph triples</span></div>
+            <div class="toolbar glass"><input id="memoriaKgQuery" placeholder="Search KG…" /><button id="memoriaKgSearch" class="primary">Search</button><span id="memoriaKgCount" class="muted"></span></div>
+            <div class="table-wrap"><table><thead><tr><th>Subject</th><th>Predicate</th><th>Object</th><th>Confidence</th></tr></thead><tbody id="memoriaKgRows"></tbody></table></div>
+          </div>
+          <div id="memoriaPreferences" class="subpanel">
+            <div class="section-head mini"><h2>MEMORIA Preferences</h2><span>extracted user preferences</span></div>
+            <div class="toolbar glass"><input id="memoriaPreferencesQuery" placeholder="Search preferences…" /><button id="memoriaPreferencesSearch" class="primary">Search</button><span id="memoriaPreferencesCount" class="muted"></span></div>
+            <div id="memoriaPreferencesList" class="list timeline"></div>
+          </div>
+        </section>
+
+        <section id="search" class="tab">
+          <div class="section-head"><h2>Search</h2><span>results from memories, triples, and consolidations</span></div>
+          <div class="toolbar glass"><input id="globalSearchQuery" placeholder="Search everything…" /><button id="globalSearchButton" class="primary">Search</button></div>
+          <div id="globalSearchResults" class="search-results"></div>
+        </section>
+
+        <section id="explore" class="tab">
+          <div class="section-head"><h2>Memories</h2><span>memory browser + recall debug</span></div>
+          <div class="section-tabs glass" data-section="explore">
+            <button data-panel="exploreMemories" class="active">Memories</button>
+            <button data-panel="exploreRecall">Recall debug</button>
+          </div>
+          <div id="exploreMemories" class="subpanel active">
+            <div class="section-head mini"><h2>Memory browser</h2><span>working + episodic</span></div>
+            <div class="toolbar glass">
+              <input id="memoryQuery" placeholder="Search memory content…" />
+              <select id="memoryKind"><option value="all">all tiers</option><option value="working">working</option><option value="episodic">episodic</option></select>
+              <select id="memorySource"><option value="">all sources</option></select>
+              <select id="memoryScope"><option value="">all scopes</option></select>
+              <select id="memorySession"><option value="">all sessions</option></select>
+              <select id="memoryVeracity"><option value="">all trust levels</option><option value="stated">stated</option><option value="inferred">inferred</option><option value="tool">tool</option><option value="imported">imported</option><option value="unknown">unknown</option></select>
+              <select id="memoryDegradation"><option value="">all lifecycle tiers</option><option value="1">hot · full detail</option><option value="2">warm · compressed</option><option value="3">cold · key signal</option></select>
+              <select id="memoryTrustPreset"><option value="">all confidence</option><option value="contaminated">needs review</option><option value="degraded">degraded only</option><option value="due">due for degradation</option></select>
+              <select id="memoryStatus"><option value="active">active</option><option value="all">all statuses</option><option value="expired">expired</option><option value="superseded">superseded</option></select>
+              <select id="memorySort"><option value="recent">newest</option><option value="oldest">oldest</option><option value="importance">importance</option><option value="recall">recall count</option></select>
+              <button id="memorySearch" class="primary">Search</button>
+              <button id="memoryClear">Clear</button>
+            </div>
+            <div id="bulkMemoryBar" class="bulk-bar glass hidden">
+              <label class="bulk-select-control"><input id="bulkSelectAll" type="checkbox" /> <span>Select visible</span></label>
+              <span id="bulkSelectionStatus" class="bulk-selection-status muted">0 selected</span>
+              <button id="bulkExpire" class="drawer-action warn">Expire selected</button>
+              <button id="bulkVeracity" class="drawer-action">Set trust</button>
+              <button id="bulkExpiry" class="drawer-action">Set expiry</button>
+              <button id="bulkImportance" class="drawer-action">Set importance</button>
+              <button id="bulkClear" class="drawer-action">Clear selection</button>
+            </div>
+            <div id="memoryList" class="list memory-grid"></div>
+          </div>
+          <div id="exploreRecall" class="subpanel">
+            <div class="section-head mini"><h2>Recall debugger</h2><span>why memories rank</span></div>
+            <div class="toolbar glass"><input id="recallQuery" placeholder="Type a recall query…" /><button id="recallButton" class="primary">Debug recall</button></div>
+            <div id="recallNote" class="muted"></div>
+            <div id="recallResults" class="list memory-grid"></div>
+          </div>
+        </section>
+
+        <section id="activity" class="tab">
+          <div class="section-head"><h2>History</h2><span>chronological memory events + consolidation history</span></div>
+          <div class="section-tabs glass" data-section="activity">
+            <button data-panel="activityTimeline" class="active">Timeline</button>
+            <button data-panel="activityConsolidations">Consolidations</button>
+          </div>
+          <div id="activityTimeline" class="subpanel active">
+            <div class="section-head mini"><h2>Timeline</h2><span>day / session stream</span></div>
+            <div class="toolbar glass">
+              <input id="timelineQuery" placeholder="Filter timeline…" />
+              <select id="timelineGroup"><option value="day">group by day</option><option value="session">group by session</option></select>
+              <button id="timelineButton" class="primary">Load timeline</button>
+            </div>
+            <div id="timelineResults" class="timeline-groups"></div>
+          </div>
+          <div id="activityConsolidations" class="subpanel">
+            <div class="section-head mini"><h2>Consolidations</h2><span>click entries to inspect</span></div>
+            <div class="toolbar glass">
+              <input id="consolidationQuery" placeholder="Filter summaries / sessions…" />
+              <button id="consolidationClear">Clear</button>
+              <span class="muted">Each run shows compressed-memory previews and session actions.</span>
+            </div>
+            <div id="consolidationList" class="list timeline"></div>
+          </div>
+        </section>
+
+        <section id="graph" class="tab">
+          <div class="section-head"><h2>Knowledge Graph</h2><span>relationships + triple table</span></div>
+          <div class="section-tabs glass" data-section="graph">
+            <button data-panel="graphGraph" class="active">Relationship graph</button>
+            <button data-panel="graphTriples">Facts table</button>
+          </div>
+          <div id="graphGraph" class="subpanel active">
+            <div class="section-head mini"><h2>Relationship graph</h2><span>click nodes / edges to inspect</span></div>
+            <div class="toolbar glass">
+              <input id="graphQuery" placeholder="Filter graph by subject / predicate / object…" />
+              <button id="graphRefresh" class="primary">Refresh graph</button>
+              <button id="graphClear">Clear</button>
+              <button id="graphResetView">Reset view</button>
+              <span class="muted" id="graphHint">Scroll to zoom, drag to pan. Click nodes / edges to inspect.</span>
+            </div>
+            <div class="graph-layout">
+              <div class="graph-wrap"><svg id="graphSvg" viewBox="0 0 1000 650"></svg></div>
+              <aside id="graphInspector" class="graph-inspector glass">
+                <div class="inspector-kicker">Graph inspector</div>
+                <h3>Nothing selected</h3>
+                <p class="muted">Pick a node or edge to inspect connected triples, then jump into the Triples table.</p>
+              </aside>
+            </div>
+          </div>
+          <div id="graphTriples" class="subpanel">
+            <div class="section-head mini"><h2>Triples</h2><span>knowledge graph facts</span></div>
+            <div class="toolbar glass"><input id="tripleQuery" placeholder="Search subject / predicate / object…" /><button id="tripleSearch" class="primary">Search</button></div>
+            <div class="table-wrap"><table><thead><tr><th>Subject</th><th>Predicate</th><th>Object</th><th>Confidence</th></tr></thead><tbody id="tripleRows"></tbody></table></div>
+          </div>
+        </section>
+
+        <section id="settings" class="tab">
+          <div class="section-head"><h2>Settings</h2><span>access control</span></div>
+          <div class="settings-grid">
+            <div class="glass settings-card">
+              <div class="breakdown-title">Password auth</div>
+              <p class="muted">Optional. If enabled, users must enter the password before API data loads. Required for memory admin mode when the dashboard is exposed on LAN/non-local hosts.</p>
+              <label class="check-row"><input id="authEnabled" type="checkbox" /> Enable password</label>
+              <input id="authPassword" type="password" placeholder="Set / change password" />
+              <div class="item-actions"><button id="saveAuth" class="primary">Save auth settings</button><button id="clearAuth">Disable + clear password</button><button id="logoutAuth">Logout</button></div>
+              <p id="authStatus" class="muted"></p>
+            </div>
+            <div class="glass settings-card">
+              <div class="breakdown-title">Server + database</div>
+              <p class="muted">Controls where the dashboard binds and which Mnemosyne SQLite database it reads. Save here, then restart the dashboard for host, port, or database path changes to take effect.</p>
+              <label class="field-label" for="configHost">Address / host</label>
+              <input id="configHost" placeholder="0.0.0.0" />
+              <p class="helper-text"><strong>127.0.0.1</strong> = localhost only. <strong>0.0.0.0</strong> = LAN access from phones/other machines on your network.</p>
+              <label class="field-label" for="configPort">Port</label>
+              <input id="configPort" inputmode="numeric" placeholder="8765" />
+              <label class="field-label" for="configDbPath">Database location</label>
+              <input id="configDbPath" placeholder="~/.hermes/mnemosyne/data/mnemosyne.db" />
+              <div class="item-actions"><button id="saveRuntimeConfig" class="primary">Save server settings</button></div>
+              <p id="configStatus" class="muted"></p>
+            </div>
+            <div class="glass settings-card danger-card">
+              <div class="breakdown-title">Memory maintenance</div>
+              <p class="muted">Safe correction actions for the agent brain. Bulk actions are allowed only for selected active memories. This enables expire, supersede, trust/veracity, expiry, and importance edits only — no lifecycle-tier edits, raw content overwrite, or hard delete.</p>
+              <label class="check-row"><input id="memoryAdminEnabled" type="checkbox" /> Enable admin maintenance mode</label>
+              <label class="check-row"><input id="backupBeforeMutation" type="checkbox" checked /> Backup database before every mutation</label>
+              <div class="item-actions"><button id="saveMemoryAdmin" class="primary">Save admin mode</button><button id="createBackup">Create backup now</button><button id="viewAuditLog">View audit log</button></div>
+              <p id="memoryAdminStatus" class="muted"></p>
+            </div>
+            <div class="glass settings-card">
+              <div class="breakdown-title">Database diagnostics</div>
+              <p class="muted">Install health check for the configured Mnemosyne SQLite database.</p>
+              <div id="diagnosticsSummary" class="diag-grid"></div>
+              <div class="item-actions"><button id="refreshDiagnostics" class="primary">Refresh diagnostics</button><button id="copyDiagnostics">Copy diagnostics</button></div>
+              <p id="diagnosticsStatus" class="muted"></p>
+            </div>
+            <div class="glass settings-card">
+              <div class="breakdown-title">Runtime diagnostics</div>
+              <p class="muted">Current dashboard process, launch source, listener PID, and health probe. Useful when launchd restarts the dashboard or a stale PID file makes status look wrong.</p>
+              <div id="runtimeDiagnostics" class="diag-grid runtime-diag-grid"></div>
+              <div class="breakdown-title">Frontend boot error</div>
+              <p id="bootErrorStatus" class="muted">No frontend boot errors recorded in this page session.</p>
+              <pre id="bootErrorStack" class="boot-error-stack hidden"></pre>
+              <div class="item-actions"><button id="retryBootstrap" class="primary">Retry load</button><button id="copyBootError">Copy error details</button></div>
+            </div>
+            <div class="glass settings-card">
+              <div class="breakdown-title">Mnemosyne 3.x sync diagnostics</div>
+              <p class="muted">Sync diagnostics: read-only Mnemosyne streaming and DeltaSync readiness. Useful for debugging future multi-machine sync, not daily memory browsing.</p>
+              <div id="settingsDeltaSync" class="realtime-deltasync"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <footer class="app-footer">
+        Built by <a href="https://github.com/wysie" target="_blank" rel="noopener noreferrer">wysie</a> with <a href="https://github.com/NousResearch/hermes-agent" target="_blank" rel="noopener noreferrer">Hermes Agent</a> · Thanks to <a href="https://github.com/AxDSan" target="_blank" rel="noopener noreferrer">AxDSan</a> for creating <a href="https://github.com/AxDSan/mnemosyne" target="_blank" rel="noopener noreferrer">Mnemosyne</a>
+      </footer>
+    </div>
+  </div>
+
+  <div id="loginOverlay" class="login-overlay hidden">
+    <div class="login-card glass">
+      <div class="brand compact-brand"><div class="brand-mark">M</div><div><div class="brand-name">Mnemosyne</div><div class="brand-sub">Hermes Memory</div></div></div>
+      <h2>Password required</h2>
+      <p class="muted">This dashboard has optional password auth enabled.</p>
+      <input id="loginPassword" type="password" placeholder="Password" />
+      <button id="loginButton" class="primary">Unlock</button>
+      <p id="loginError" class="muted"></p>
+    </div>
+  </div>
+
+  <div id="detail" class="drawer hidden"><button id="closeDetail" aria-label="Close detail">×</button><div class="drawer-title">Detail</div><pre id="detailBody"></pre></div>
+  <script defer src="/mnemosyne/dashboard/static/l10n.js"></script>
+  <script type="module" src="/mnemosyne/dashboard/static/app.js"></script>
+</body>
+</html>

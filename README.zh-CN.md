@@ -27,6 +27,7 @@ Mnemosyne 支持 MCP、Python SDK 及多种 agent 框架（Claude Code、Cursor�
 - **五个原生工具**：`mnemosyne_remember` / `mnemosyne_recall` / `mnemosyne_forget` / `mnemosyne_stats` / `mnemosyne_sleep`
 - **内嵌技能**：`mnemosyne` 技能随插件自动注册，指导 agent 何时存储/检索记忆
 - **设置面板**：DSH Settings 左侧独立 "Mnemosyne" 入口，含 CLI 状态、记忆统计、一键安装/测试、配置表单
+- **只读记忆面板**：通过可选的 Better Sidebar 集成从 Mnemosyne 设置面板打开，展示当前 Bank 的总览、记忆、三元组、整合记录、搜索和详情视图，不提供修改控制
 - **自动安装 CLI**：面板 Setup 按钮用 `uv tool install mnemosyne-memory` 自动装好，并补齐 `config.yaml` 默认值
 - **数据隔离**：SQLite 库与 `config.yaml` 存于 `~/.dsh/mnemosyne`，不碰 `~/.hermes`
 - **配置同步**：面板从扁平的 `config.yaml` 读取 mnemosyne 实际配置，空值字段显示默认值 placeholder；保存后自动执行 `mnemosyne config reload`
@@ -119,7 +120,7 @@ dsh plugin --profile web add ./dsh-mnemosyne
 
 ```bash
 pnpm install
-pnpm test        # node --test（117 例：96 单元 + 17 集成 + 4 client）
+pnpm test        # node --test（124 例：103 单元 + 17 集成 + 4 client）
 ```
 
 ## License
