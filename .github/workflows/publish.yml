@@ -57,6 +57,8 @@ jobs:
           node-version: "20"
 
       - name: Check published version and open storefront PR
-        run: node scripts/sync-storefront.mjs
+        run: |
+          gh auth setup-git
+          node scripts/sync-storefront.mjs
         env:
           GH_TOKEN: ${{ secrets.STOREFRONT_TOKEN }}
