@@ -329,16 +329,21 @@
               <select id="memorySort"><option value="recent">newest</option><option value="oldest">oldest</option><option value="importance">importance</option><option value="recall">recall count</option></select>
               <button id="memorySearch" class="primary">Search</button>
               <button id="memoryClear">Clear</button>
+              <div id="bulkMemoryBar" class="bulk-bar hidden" aria-label="Batch memory actions" data-i18n-aria-label="Batch memory actions">
+                <label class="bulk-select-control"><input id="bulkSelectAll" type="checkbox" /> <span data-i18n="Select all in current list">Select all in current list</span></label>
+                <span id="bulkSelectionStatus" class="bulk-selection-status muted" role="status">0 selected from current list</span>
+                <label class="bulk-target-control" for="bulkScope"><span data-i18n="Move to">Move to</span><select id="bulkScope"><option value="" data-i18n="choose scope">choose scope</option><option value="global" data-i18n="global">global</option><option value="session" data-i18n="filtered session">filtered session</option><option value="workspace" data-i18n="workspace">workspace</option><option value="default" data-i18n="default">default</option></select></label>
+                <select id="bulkWorkspaceTarget" class="bulk-workspace-target" aria-label="Workspace target" data-i18n-aria-label="Workspace target" disabled><option value="" data-i18n="Choose a workspace">Choose a workspace</option></select>
+                <button id="bulkMove" class="drawer-action primary" data-i18n="Move selected">Move selected</button>
+                <button id="bulkExpire" class="drawer-action warn" data-i18n="Expire selected">Expire selected</button>
+                <button id="bulkVeracity" class="drawer-action" data-i18n="Set trust">Set trust</button>
+                <button id="bulkExpiry" class="drawer-action" data-i18n="Set expiry">Set expiry</button>
+                <button id="bulkImportance" class="drawer-action" data-i18n="Set importance">Set importance</button>
+                <button id="bulkClear" class="drawer-action" data-i18n="Clear selection">Clear selection</button>
+                <p id="bulkActionStatus" class="management-status" role="status" aria-live="polite"></p>
+              </div>
             </div>
-            <div id="bulkMemoryBar" class="bulk-bar glass hidden">
-              <label class="bulk-select-control"><input id="bulkSelectAll" type="checkbox" /> <span>Select visible</span></label>
-              <span id="bulkSelectionStatus" class="bulk-selection-status muted">0 selected</span>
-              <button id="bulkExpire" class="drawer-action warn">Expire selected</button>
-              <button id="bulkVeracity" class="drawer-action">Set trust</button>
-              <button id="bulkExpiry" class="drawer-action">Set expiry</button>
-              <button id="bulkImportance" class="drawer-action">Set importance</button>
-              <button id="bulkClear" class="drawer-action">Clear selection</button>
-            </div>
+            <p class="muted memory-batch-hint" data-i18n="Filter the list first, then select individual memories or use “Select all in current list”. Batch actions apply only to selected active memories.">Filter the list first, then select individual memories or use “Select all in current list”. Batch actions apply only to selected active memories.</p>
             <div id="memoryList" class="list memory-grid"></div>
           </div>
           <div id="exploreRecall" class="subpanel">
@@ -432,7 +437,7 @@
             </div>
             <div class="glass settings-card danger-card">
               <div class="breakdown-title">Memory maintenance</div>
-              <p class="muted">Safe correction actions for the agent brain. Bulk actions are allowed only for selected active memories. This enables expire, supersede, trust/veracity, expiry, and importance edits only — no lifecycle-tier edits, raw content overwrite, or hard delete.</p>
+              <p class="muted">Safe correction actions for the agent brain. Bulk actions are allowed only for selected active memories. This enables expire, trust/veracity, expiry, and importance edits only — no lifecycle-tier edits, raw content overwrite, supersede, or hard delete.</p>
               <label class="check-row"><input id="memoryAdminEnabled" type="checkbox" /> Enable admin maintenance mode</label>
               <label class="check-row"><input id="backupBeforeMutation" type="checkbox" checked /> Backup database before every mutation</label>
               <div class="item-actions"><button id="saveMemoryAdmin" class="primary">Save admin mode</button><button id="createBackup">Create backup now</button><button id="viewAuditLog">View audit log</button></div>

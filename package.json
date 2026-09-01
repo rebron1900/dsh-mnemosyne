@@ -1,7 +1,7 @@
 {
   "name": "dsh-mnemosyne",
-  "version": "0.5.0",
-  "description": "Mnemosyne memory for DeepSeek Harness: remember / recall / forget / stats / sleep tools, embedded skill, auto-setup, optional auto-sync/prefetch, a Settings panel, and a read-only memory dashboard. Data lives under ~/.dsh/mnemosyne.",
+  "version": "0.6.0",
+  "description": "Mnemosyne memory for DeepSeek Harness: remember / recall / forget / stats / sleep tools, embedded skill, auto-setup, optional auto-sync/prefetch, a Settings panel, and a managed memory dashboard. Data lives under ~/.dsh/mnemosyne.",
   "keywords": [
     "deepseek-harness",
     "dsh",

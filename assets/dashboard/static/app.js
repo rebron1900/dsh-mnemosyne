@@ -24,6 +24,7 @@ const REVIEW_PAGE_SIZE = 100;
 let latestMemoryItems = [];
 let memorySearchSequence = 0;
 let memorySearchController = null;
+let workspaceState = { bound: [] };
 let latestReviewItems = [];
 let graphView = { scale:1, x:0, y:0, dragging:false, sx:0, sy:0, ox:0, oy:0 };
 const CONSTELLATION_MIN_ZOOM = .55;
@@ -305,17 +306,6 @@ function askImportance(current){
     validate: (v) => Number.isFinite(v) && v >= 0 && v <= 1 ? '' : 'Enter a number between 0.00 and 1.00.'
   });
 }
-function askReplacement(content){
-  return openActionModal({
-    title: 'Supersede memory',
-    description: 'Create a corrected replacement memory and expire the old one. The original stays in history.',
-    confirmText: 'Create replacement',
-    tone: 'dangerish',
-    bodyHtml: `<label class="modal-field"><span>Replacement memory content</span><textarea id="modalReplacement" rows="9">${esc(content || '')}</textarea></label>`,
-    readValue: () => $('#modalReplacement').value.trim(),
-    validate: (v) => v ? '' : 'Replacement content cannot be empty.'
-  });
-}
 function askVeracity(current){
   const value = String(current || 'unknown').toLowerCase();
   return openActionModal({
@@ -453,7 +443,7 @@ function switchTab(name, opts={}){
   if(name==='graph' || section==='graph') loadGraph();
   if(name==='triples') loadTriples();
   if(name==='consolidations') loadConsolidations();
-  if(name==='memories') loadMemories();
+  if(name==='memories') { loadWorkspaces(); loadMemories(); }
   if(name==='search') loadGlobalSearch();
   if(name==='recall') loadRecallDebug();
   if(name==='timelineView' || section==='activity') loadTimeline();
@@ -678,6 +668,19 @@ function bindBreakdownClicks(){
   $$('#degradationBreakdown .break-row').forEach(row => row.onclick = () => { const map={hot:'1',warm:'2',cold:'3'}; $('#memoryDegradation').value = map[row.dataset.filter] || ''; switchTab('memories'); });
   $$('#sessionBreakdown .break-row').forEach(row => row.onclick = () => openSessionDetail(row.dataset.filter || ''));
 }
+function renderWorkspaceOptions(){
+  const target=$('#bulkWorkspaceTarget');
+  if(!target) return;
+  const l10n=window.__mnemoL10n;
+  const optionText=(x) => l10n?.workspaceOption?.(x.displayName || x.canonicalPath || shortId(x.namespace), x.memory?.count || 0) || `${x.displayName || x.canonicalPath || shortId(x.namespace)} · ${x.memory?.count || 0} memories`;
+  target.innerHTML = workspaceState.bound.length
+    ? '<option value="">Choose a workspace</option>'+workspaceState.bound.filter(x=>!x.supersededBy).map(x=>`<option value="${esc(x.namespace)}">${esc(optionText(x))}</option>`).join('')
+    : '<option value="">No bound workspaces</option>';
+}
+async function loadWorkspaces(){
+  try { const data=await api('/mnemosyne/workspaces'); workspaceState=data.workspaces || {bound:[]}; renderWorkspaceOptions(); }
+  catch(e) { bulkStatus(`Workspace targets unavailable: ${e.message}`, true); }
+}
 async function loadMemories(){
   const sequence = ++memorySearchSequence;
   memorySearchController?.abort();
@@ -704,6 +707,8 @@ async function loadMemories(){
     const data = await api(`/mnemosyne/dashboard/api/memories?${params.toString()}`, { signal: memorySearchController.signal });
     if(sequence !== memorySearchSequence) return;
     latestMemoryItems = data.items || [];
+    const visibleIds = new Set(latestMemoryItems.map(item => item.id));
+    for (const id of bulkSelection) if (!visibleIds.has(id)) bulkSelection.delete(id);
     list.innerHTML = latestMemoryItems.map(item => memoryItem(item, {selectable:true})).join('') || stateHtml('empty', 'No memories found.', 'Try clearing filters or broadening the memory content search.');
     bindMemoryClicks(list);
     bindBulkMemoryControls();
@@ -716,60 +721,69 @@ async function loadMemories(){
     updateBulkBar();
   }
 }
+function selectedMutableIds(){ return latestMemoryItems.filter(x => bulkSelection.has(x.id) && isMutableMemory(x)).map(x => x.id); }
+function bulkStatus(message, error=false){ const el=$('#bulkActionStatus'); if(el){ el.textContent=window.__mnemoL10n?.text?.(message) || message || ''; el.dataset.state=error ? 'error' : 'ok'; } }
+function bulkSelectedStatus(selected, active){ return window.__mnemoL10n?.selectedStatus?.(selected, active) || `${selected} selected from current list · ${active} active`; }
+function bulkUpdatedStatus(count){ return window.__mnemoL10n?.updatedStatus?.(count) || `${count} selected memories updated.`; }
+function bulkErrorStatus(message){ return window.__mnemoL10n?.errorStatus?.(message) || `Batch action failed: ${message}`; }
+function mutateOneMemory(action, id, value, backup){
+  return postJson('/mnemosyne/dashboard/api/admin/memory/batch', {action, ids:[id], value, backup});
+}
+function updateBulkScopeControl(){
+  const scope=$('#bulkScope')?.value || '';
+  const target=$('#bulkWorkspaceTarget');
+  if(!target) return;
+  const enabled=scope === 'workspace';
+  target.disabled=!enabled;
+  target.setAttribute('aria-disabled', String(!enabled));
+  if(!enabled) target.value='';
+}
 function updateBulkBar(){
   const bar = $('#bulkMemoryBar');
   if(!bar) return;
   const admin = canAdmin();
   bar.classList.toggle('hidden', !latestMemoryItems.length);
-  const actionable = latestMemoryItems.filter(x => bulkSelection.has(x.id) && isMutableMemory(x)).length;
-  $('#bulkSelectionStatus').textContent = `${bulkSelection.size} selected · ${actionable} active`;
-  $('#bulkExpire').disabled = !admin || !actionable;
-  $('#bulkVeracity').disabled = !admin || !actionable;
-  $('#bulkExpiry').disabled = !admin || !actionable;
-  $('#bulkImportance').disabled = !admin || !actionable;
+  const actionable = selectedMutableIds().length;
+  $('#bulkSelectionStatus').textContent = bulkSelectedStatus(bulkSelection.size, actionable);
+  ['bulkMove','bulkExpire','bulkVeracity','bulkExpiry','bulkImportance'].forEach(id => { const el=$('#'+id); if(el) el.disabled = !admin || !actionable; });
   $('#bulkSelectAll').checked = latestMemoryItems.length > 0 && latestMemoryItems.every(x => bulkSelection.has(x.id));
   $('#bulkSelectAll').disabled = !latestMemoryItems.length;
+  updateBulkScopeControl();
 }
 function bindBulkMemoryControls(){
   $$('#memoryList .memory-check').forEach(chk => chk.onchange = e => { e.stopPropagation(); chk.checked ? bulkSelection.add(chk.dataset.id) : bulkSelection.delete(chk.dataset.id); updateBulkBar(); });
 }
-async function expireSelectedMemories(){
-  const ids = latestMemoryItems.filter(x => bulkSelection.has(x.id) && isMutableMemory(x)).map(x => x.id);
-  if(!ids.length) return;
-  const ok = await confirmAction({title:'Expire selected memories?', description:`Expire ${ids.length} selected active memories. Backups and audit entries will be created.`, confirmText:'Expire selected', tone:'warn'});
+async function runSelectedBatch(action, value, description, tone='warn'){
+  const ids = selectedMutableIds();
+  if(!ids.length){ bulkStatus('Select at least one active memory from the current list.', true); return; }
+  const l10n=window.__mnemoL10n;
+  const ok = await confirmAction({title:l10n?.batchConfirmTitle?.(ids.length) || `Apply to ${ids.length} selected memories?`, description:l10n?.batchDescription?.(description) || description, confirmText:l10n?.text?.('Apply batch action') || 'Apply batch action', tone});
   if(!ok) return;
-  for(const id of ids) await postJson('/mnemosyne/dashboard/api/admin/memory/invalidate', {memory_id:id, backup: $('#backupBeforeMutation') ? $('#backupBeforeMutation').checked : true});
-  bulkSelection.clear(); await loadStats(); await loadMemories();
+  try {
+    const data = await postJson('/mnemosyne/dashboard/api/admin/memory/batch', {action, ids, value, backup: $('#backupBeforeMutation') ? $('#backupBeforeMutation').checked : true});
+    bulkSelection.clear(); bulkStatus(bulkUpdatedStatus(data.updated || 0)); await loadStats(); await loadMemories();
+  } catch(e){ bulkStatus(bulkErrorStatus(e.message), true); }
 }
-async function setSelectedImportance(){
-  const ids = latestMemoryItems.filter(x => bulkSelection.has(x.id) && isMutableMemory(x)).map(x => x.id);
-  if(!ids.length) return;
-  const v = await askImportance(0.5);
-  if(v === null) return;
-  for(const id of ids) await postJson('/mnemosyne/dashboard/api/admin/memory/importance', {memory_id:id, importance:Number(v), backup: $('#backupBeforeMutation') ? $('#backupBeforeMutation').checked : true});
-  bulkSelection.clear(); await loadStats(); await loadMemories();
-}
-async function setSelectedVeracity(){
-  const ids = latestMemoryItems.filter(x => bulkSelection.has(x.id) && isMutableMemory(x)).map(x => x.id);
-  if(!ids.length) return;
-  const v = await askVeracity('stated');
-  if(v === null) return;
-  for(const id of ids) await postJson('/mnemosyne/dashboard/api/admin/memory/veracity', {memory_id:id, veracity:v, backup: $('#backupBeforeMutation') ? $('#backupBeforeMutation').checked : true});
-  bulkSelection.clear(); await loadStats(); await loadMemories();
-}
-async function setSelectedExpiry(){
-  const ids = latestMemoryItems.filter(x => bulkSelection.has(x.id) && isMutableMemory(x)).map(x => x.id);
-  if(!ids.length) return;
-  const v = await askExpiry('');
-  if(v === null) return;
-  for(const id of ids) await postJson('/mnemosyne/dashboard/api/admin/memory/expiry', {memory_id:id, valid_until:v, backup: $('#backupBeforeMutation') ? $('#backupBeforeMutation').checked : true});
-  bulkSelection.clear(); await loadStats(); await loadMemories();
+async function expireSelectedMemories(){ return runSelectedBatch('invalidate', '', 'Expire the selected active memories. Their original records remain available in history.', 'warn'); }
+async function setSelectedImportance(){ const v = await askImportance(0.5); if(v !== null) return runSelectedBatch('importance', String(v), 'Set the same importance value on every selected active memory.'); }
+async function setSelectedVeracity(){ const v = await askVeracity('stated'); if(v !== null) return runSelectedBatch('veracity', v, 'Set the same trust value on every selected active memory.'); }
+async function setSelectedExpiry(){ const v = await askExpiry(''); if(v !== null) return runSelectedBatch('expiry', v, 'Set or clear the expiry date on every selected active memory.'); }
+async function moveSelectedMemories(){
+  const scope=$('#bulkScope')?.value || ''; if(!scope){ bulkStatus('Choose a target scope first.', true); return; }
+  if(scope === 'workspace' && !$('#bulkWorkspaceTarget')?.value){ bulkStatus('Choose a workspace target first.', true); return; }
+  const session = scope === 'global' || scope === 'default' ? scope : (scope === 'workspace' ? $('#bulkWorkspaceTarget').value : ($('#memorySession')?.value || 'current'));
+  return runSelectedBatch('scope', `${scope}\t${session}`, `Move the selected active memories to the ${scope} scope.`, 'warn');
 }
 function bindMemoryClicks(root){
   root.querySelectorAll('.session-link').forEach(btn => btn.onclick = (e) => { e.stopPropagation(); openSessionDetail(btn.dataset.session || ''); });
   root.querySelectorAll('.item[data-id]').forEach(el => el.onclick = (e) => { if(e.target.closest('.session-link,button,a,label,input')) return; openMemoryDetail(el.dataset.id); });
 }
-function canAdmin(){ const cfg = authState.config || {}; const localOnly = ['127.0.0.1','localhost','::1'].includes(cfg.host || '0.0.0.0'); return !!(cfg.memory_admin_enabled && (localOnly || (authState.auth_enabled && authState.authenticated))); }
+function canAdmin(){
+  // DSH serves this dashboard from the same loopback origin. Batch mutations
+  // are protected by the host route's same-origin check; do not require the
+  // unrelated upstream dashboard admin toggle for this local surface.
+  return ['127.0.0.1','localhost','::1'].includes(location.hostname);
+}
 function isMutableMemory(item){ return String(item?.status || 'active').toLowerCase() === 'active'; }
 function whyMemoryHtml(item){
   const reasons = [];
@@ -801,7 +815,7 @@ function whyMemoryHtml(item){
 function memoryDetailHtml(item){
   const admin = canAdmin();
   const mutable = isMutableMemory(item);
-  const adminActions = admin && mutable ? '<button id="expireMemory" class="drawer-action warn">Expire now</button><button id="editVeracity" class="drawer-action">Set trust</button><button id="editExpiry" class="drawer-action">Set expiry</button><button id="editImportance" class="drawer-action">Edit importance</button><button id="supersedeMemory" class="drawer-action primary">Supersede</button>' : '';
+  const adminActions = admin && mutable ? '<button id="expireMemory" class="drawer-action warn">Expire now</button><button id="editVeracity" class="drawer-action">Set trust</button><button id="editExpiry" class="drawer-action">Set expiry</button><button id="editImportance" class="drawer-action">Edit importance</button>' : '';
   const actionNote = admin ? (mutable ? '' : `<span class="muted">This memory is ${esc(item.status || 'not active')}; mutation actions are disabled.</span>`) : '<span class="muted">Enable Settings → Memory maintenance to modify memories.</span>';
   const trust = String(item.veracity || 'unknown').toLowerCase();
   const lifecycle = item.degradation_label ? `${item.degradation_label} · tier ${item.degradation_tier}` : 'not degraded';
@@ -851,33 +865,28 @@ async function openMemoryDetail(memoryId, opts={}){
       tone: 'warn'
     });
     if(!ok) return;
-    try { const r = await postJson('/mnemosyne/dashboard/api/admin/memory/invalidate', {memory_id:item.id, backup: backup()}); $('#memoryActionStatus').textContent = `Expired. Backup: ${r.backup?.path || 'not created'}`; await loadMemories(); await openMemoryDetail(item.id); }
+    try { const r = await mutateOneMemory('invalidate', item.id, '', backup()); $('#memoryActionStatus').textContent = `Expired. Backup: ${r.backup?.path || 'not created'}`; await loadMemories(); await openMemoryDetail(item.id); }
     catch(e){ $('#memoryActionStatus').textContent = e.message; }
   };
   $('#editImportance').onclick = async () => {
     const v = await askImportance(item.importance ?? 0.5);
     if(v === null) return;
-    try { const r = await postJson('/mnemosyne/dashboard/api/admin/memory/importance', {memory_id:item.id, importance:Number(v), backup: backup()}); $('#memoryActionStatus').textContent = `Importance updated to ${r.importance}.`; await loadStats(); await loadMemories(); await openMemoryDetail(item.id); }
+    try { const r = await mutateOneMemory('importance', item.id, Number(v), backup()); $('#memoryActionStatus').textContent = `Importance updated to ${r.importance}.`; await loadStats(); await loadMemories(); await openMemoryDetail(item.id); }
     catch(e){ $('#memoryActionStatus').textContent = e.message; }
   };
   $('#editVeracity').onclick = async () => {
     const v = await askVeracity(item.veracity || 'unknown');
     if(v === null) return;
-    try { const r = await postJson('/mnemosyne/dashboard/api/admin/memory/veracity', {memory_id:item.id, veracity:v, backup: backup()}); $('#memoryActionStatus').textContent = `Trust updated to ${r.veracity}.`; await loadStats(); await loadMemories(); await openMemoryDetail(item.id); }
+    try { const r = await mutateOneMemory('veracity', item.id, v, backup()); $('#memoryActionStatus').textContent = `Trust updated to ${r.veracity}.`; await loadStats(); await loadMemories(); await openMemoryDetail(item.id); }
     catch(e){ $('#memoryActionStatus').textContent = e.message; }
   };
   $('#editExpiry').onclick = async () => {
     const v = await askExpiry(item.valid_until || '');
     if(v === null) return;
-    try { const r = await postJson('/mnemosyne/dashboard/api/admin/memory/expiry', {memory_id:item.id, valid_until:v, backup: backup()}); $('#memoryActionStatus').textContent = `Expiry ${r.valid_until ? `set to ${r.valid_until}` : 'cleared'}.`; await loadStats(); await loadMemories(); await openMemoryDetail(item.id); }
+    try { const r = await mutateOneMemory('expiry', item.id, v, backup()); $('#memoryActionStatus').textContent = `Expiry ${r.valid_until ? `set to ${r.valid_until}` : 'cleared'}.`; await loadStats(); await loadMemories(); await openMemoryDetail(item.id); }
     catch(e){ $('#memoryActionStatus').textContent = e.message; }
   };
-  $('#supersedeMemory').onclick = async () => {
-    const replacement = await askReplacement(item.content || '');
-    if(replacement === null) return;
-    try { const r = await postJson('/mnemosyne/dashboard/api/admin/memory/supersede', {memory_id:item.id, content:replacement, importance:Number(item.importance ?? 0.5), backup: backup()}); $('#memoryActionStatus').textContent = `Superseded by ${r.replacement_id}.`; $('#memoryStatus').value = 'all'; await loadStats(); await loadMemories(); await openMemoryDetail(r.replacement_id); }
-    catch(e){ $('#memoryActionStatus').textContent = e.message; }
-  };
+
 }
 function sessionEvent(e){ return `<div class="session-event" data-json='${esc(JSON.stringify(e.item))}'><div class="meta"><span class="badge">${esc(e.type)}</span><span>${esc(e.timestamp || '')}</span></div><div class="content"><strong>${esc(e.title)}</strong><br>${esc(e.preview || '')}</div></div>`; }
 async function openSessionDetail(sessionId, opts={}){
@@ -1214,7 +1223,7 @@ async function confirmSelectedReviewMemories(){
   const ok = await confirmAction({title:'Confirm selected memories?', description:`Mark ${ids.length} selected active memories as stated.`, confirmText:'Confirm selected'});
   if(!ok) return;
   const backup = $('#backupBeforeMutation') ? $('#backupBeforeMutation').checked : true;
-  for(const id of ids) await postJson('/mnemosyne/dashboard/api/admin/memory/veracity', {memory_id:id, veracity:'stated', backup});
+  await postJson('/mnemosyne/dashboard/api/admin/memory/batch', {action:'veracity', ids, value:'stated', backup});
   reviewSelection.clear(); await loadStats(); await loadReview();
 }
 async function setSelectedReviewVeracity(){
@@ -1223,7 +1232,7 @@ async function setSelectedReviewVeracity(){
   const v = await askVeracity('stated');
   if(v === null) return;
   const backup = $('#backupBeforeMutation') ? $('#backupBeforeMutation').checked : true;
-  for(const id of ids) await postJson('/mnemosyne/dashboard/api/admin/memory/veracity', {memory_id:id, veracity:v, backup});
+  await postJson('/mnemosyne/dashboard/api/admin/memory/batch', {action:'veracity', ids, value:v, backup});
   reviewSelection.clear(); await loadStats(); await loadReview();
 }
 async function setSelectedReviewExpiry(){
@@ -1232,7 +1241,7 @@ async function setSelectedReviewExpiry(){
   const v = await askExpiry('');
   if(v === null) return;
   const backup = $('#backupBeforeMutation') ? $('#backupBeforeMutation').checked : true;
-  for(const id of ids) await postJson('/mnemosyne/dashboard/api/admin/memory/expiry', {memory_id:id, valid_until:v, backup});
+  await postJson('/mnemosyne/dashboard/api/admin/memory/batch', {action:'expiry', ids, value:v, backup});
   reviewSelection.clear(); await loadStats(); await loadReview();
 }
 async function expireSelectedReviewMemories(){
@@ -1241,7 +1250,7 @@ async function expireSelectedReviewMemories(){
   const ok = await confirmAction({title:'Expire selected memories?', description:`Expire ${ids.length} selected active memories. Backups and audit entries will be created.`, confirmText:'Expire selected', tone:'warn'});
   if(!ok) return;
   const backup = $('#backupBeforeMutation') ? $('#backupBeforeMutation').checked : true;
-  for(const id of ids) await postJson('/mnemosyne/dashboard/api/admin/memory/invalidate', {memory_id:id, backup});
+  await postJson('/mnemosyne/dashboard/api/admin/memory/batch', {action:'invalidate', ids, value:'', backup});
   reviewSelection.clear(); await loadStats(); await loadReview();
 }
 async function loadReview(){
@@ -3488,13 +3497,17 @@ $('#mobileMenuToggle').onclick = () => {
 window.addEventListener('resize', closeMobileMenuForViewportChange, { passive: true });
 window.addEventListener('orientationchange', closeMobileMenuForViewportChange, { passive: true });
 document.addEventListener('fullscreenchange', updateVisualiserFullscreenButtons);
-$('#memorySearch').onclick = loadMemories;
-$('#bulkSelectAll').onchange = () => { latestMemoryItems.forEach(x => $('#bulkSelectAll').checked ? bulkSelection.add(x.id) : bulkSelection.delete(x.id)); loadMemories(); };
-$('#bulkClear').onclick = () => { bulkSelection.clear(); loadMemories(); };
+$('#memorySearch').onclick = () => { bulkSelection.clear(); bulkStatus(''); loadMemories(); };
+$('#bulkScope').onchange = () => { updateBulkScopeControl(); updateBulkBar(); };
+$('#bulkWorkspaceTarget').onchange = updateBulkBar;
+updateBulkScopeControl();
+$('#bulkSelectAll').onchange = () => { latestMemoryItems.forEach(x => $('#bulkSelectAll').checked ? bulkSelection.add(x.id) : bulkSelection.delete(x.id)); $$('#memoryList .memory-check').forEach(chk => { chk.checked = $('#bulkSelectAll').checked; }); updateBulkBar(); };
+$('#bulkClear').onclick = () => { bulkSelection.clear(); $$('#memoryList .memory-check').forEach(chk => { chk.checked = false; }); updateBulkBar(); };
+$('#bulkMove').onclick = moveSelectedMemories;
 $('#bulkExpire').onclick = expireSelectedMemories;
 $('#bulkVeracity').onclick = setSelectedVeracity;
 $('#bulkExpiry').onclick = setSelectedExpiry;
-$('#bulkImportance').onclick = setSelectedImportance; $('#memoryQuery').onkeydown = e => { if(e.key==='Enter') loadMemories(); };
+$('#bulkImportance').onclick = setSelectedImportance; $('#memoryQuery').onkeydown = e => { if(e.key==='Enter'){ bulkSelection.clear(); bulkStatus(''); loadMemories(); } };
 $('#reviewSelectAll').onchange = () => {
   const checked = $('#reviewSelectAll').checked;
   latestReviewItems.forEach(x => checked ? reviewSelection.add(x.id) : reviewSelection.delete(x.id));
@@ -3510,8 +3523,8 @@ $('#globalSearchButton').onclick = loadGlobalSearch; $('#globalSearchQuery').onk
 $('#menuSearchButton').onclick = menuSearch; $('#menuSearchQuery').onkeydown = e => { if(e.key==='Enter') menuSearch(); };
 $('#recallButton').onclick = loadRecallDebug; $('#recallQuery').onkeydown = e => { if(e.key==='Enter') loadRecallDebug(); };
 $('#timelineButton').onclick = loadTimeline; $('#timelineQuery').onkeydown = e => { if(e.key==='Enter') loadTimeline(); }; $('#timelineGroup').onchange = loadTimeline;
-$('#memoryClear').onclick = () => { ['memoryQuery','memorySource','memoryScope','memorySession','memoryVeracity','memoryDegradation','memoryTrustPreset'].forEach(id => $('#'+id).value = ''); $('#memoryKind').value = 'all'; $('#memoryStatus').value = 'active'; $('#memorySort').value = 'recent'; loadMemories(); };
-['memoryKind','memorySource','memoryScope','memorySession','memoryVeracity','memoryDegradation','memoryTrustPreset','memoryStatus','memorySort'].forEach(id => $('#'+id).onchange = loadMemories);
+$('#memoryClear').onclick = () => { ['memoryQuery','memorySource','memoryScope','memorySession','memoryVeracity','memoryDegradation','memoryTrustPreset'].forEach(id => $('#'+id).value = ''); $('#memoryKind').value = 'all'; $('#memoryStatus').value = 'active'; $('#memorySort').value = 'recent'; bulkSelection.clear(); loadMemories(); };
+['memoryKind','memorySource','memoryScope','memorySession','memoryVeracity','memoryDegradation','memoryTrustPreset','memoryStatus','memorySort'].forEach(id => $('#'+id).onchange = () => { bulkSelection.clear(); bulkStatus(''); loadMemories(); });
 $('#tripleSearch').onclick = loadTriples; $('#tripleQuery').onkeydown = e => { if(e.key==='Enter') loadTriples(); };
 $('#graphRefresh').onclick = loadGraph; $('#graphQuery').onkeydown = e => { if(e.key==='Enter') loadGraph(); };
 $('#graphClear').onclick = () => { $('#graphQuery').value = ''; loadGraph(); };

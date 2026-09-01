@@ -87,6 +87,16 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
     }
     return output;
   };
+  const waitForNoMatch = async (query, pattern = /ID:/, timeoutMs = 5_000) => {
+    const deadline = Date.now() + timeoutMs;
+    let output = "";
+    while (Date.now() < deadline) {
+      output = await run("recall", [query, "5"]);
+      if (pattern.test(output)) return false;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return true;
+  };
 
   it("stats on a fresh isolated store shows zero totals", async () => {
     const out = await run("stats", []);
@@ -196,7 +206,7 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
     assert.doesNotMatch(other, new RegExp(`ID: ${id}`));
 
     // Forget is session-scoped too: session B cannot delete session A's row.
-    await assert.rejects(byName.mnemosyne_forget.execute({ id }, execB), /Memory not found/);
+    await assert.rejects(byName.mnemosyne_forget.execute({ id }, execB), /Memory belongs to another namespace/);
     const deleted = await byName.mnemosyne_forget.execute({ id }, execA);
     assert.equal(deleted, `Deleted: ${id}`);
   });
@@ -268,7 +278,7 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
   });
 
   it("auto-sync writes one real user message at turn end and honors ignore_patterns", async () => {
-    writeMnemosyneConfigYaml(dataDir, { ignore_patterns: "^git status", sync_roles: "user" });
+    writeMnemosyneConfigYaml(dataDir, { ignore_patterns: "^git status\n^pip install", sync_roles: "user" });
     try {
       const { ctx, sessionEvents } = createMockCtx();
       apply(ctx, { cli: CLI, dataDir, autoSync: true, sessionScope: false });
@@ -280,8 +290,15 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
         data: { id: "test-id", role: "user", content: [{ type: "text", text: "git status\nOn branch main " + marker }], source: { kind: "user" } },
       });
       await handler(session, { type: "turn/end", data: { turn: 1 } });
-      const outBeforeNormal = await run("recall", [marker, "5"]);
-      assert.doesNotMatch(outBeforeNormal, /ID:/, "filtered noise must not be stored by auto-sync");
+      assert.equal(await waitForNoMatch(marker), true, "filtered noise must not be stored by auto-sync");
+
+      const secondRuleMarker = "multiline-ignore-token-2a6d";
+      await handler(session, {
+        type: "user/message",
+        data: { id: "test-id-1b", role: "user", content: [{ type: "text", text: "PIP INSTALL package " + secondRuleMarker }], source: { kind: "user" } },
+      });
+      await handler(session, { type: "turn/end", data: { turn: 2 } });
+      assert.equal(await waitForNoMatch(secondRuleMarker), true, "every newline-delimited rule must filter auto-sync content");
 
       const userMarker = "auto-sync-user-4b02";
       const assistantMarker = "auto-sync-assistant-7c31";
@@ -293,7 +310,7 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
         type: "assistant/message",
         data: { message: { role: "assistant", content: [{ type: "text", text: "intermediate assistant output " + assistantMarker }] } },
       });
-      await handler(session, { type: "turn/end", data: { turn: 2 } });
+      await handler(session, { type: "turn/end", data: { turn: 3 } });
       const userOut = await waitForMatch(userMarker, /ID:/);
       assert.match(userOut, /ID:/, "real user conversation must be stored at turn end");
       const assistantOut = await run("recall", [assistantMarker, "5"]);

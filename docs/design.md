@@ -8,17 +8,17 @@ Pi-mnemosyne 是 [Mnemosyne](https://github.com/mnemosyne-oss/mnemosyne)（本�
 
 ## 2. Pi-mnemosyne 代码走读
 
-仓库共 439 行，五个文件承担四种职责：
+仓库由 host、client、dashboard 资源、测试与文档共同承担四类职责：
 
 | 文件 | 职责 |
 |---|---|
 | `package.json` | `"pi": { "extensions": ["src/index.ts"], "skills": ["skills"] }` 声明扩展入口与技能目录；peerDeps 引宿主 API 与 typebox |
-| `src/index.ts` | 默认导出 `(pi: ExtensionAPI)`：调用 `pi.registerTool()` 五次，每次用 typebox `Type.Object` 定义参数，`execute()` 内 `spawn("mnemosyne", [...])` 并返回 `{ content: [{type:'text',text}], details }` |
-| `skills/mnemosyne/SKILL.md` | frontmatter（name/description）+ 使用时机、五个工具说明、最佳实践 |
-| `tests/index.test.ts` | vitest mock `ExtensionAPI`，断言注册了恰好 5 个预期名字的工具 |
+| `src/index.ts` | 默认导出 `(pi: ExtensionAPI)`：调用 `pi.registerTool()` 五次，每次用 typebox `Type.Object` 定义参数，`execute()` 内 `spawn("mnemosyne", [...])` 并返回 `{ content: [{type:'text',text}], details }`；DSH 侧另提供 `mnemosyne_bind` 工作区绑定工具 |
+| `skills/mnemosyne/SKILL.md` | frontmatter（name/description）+ 使用时机、原生工具说明、最佳实践 |
+| `tests/index.test.ts` | vitest mock `ExtensionAPI`，断言注册了恰好 6 个预期名字的工具 |
 | `.github/workflows/ci.yml` | typecheck + test |
 
-五个工具及其 CLI 映射：
+核心五个工具及其 CLI 映射；`mnemosyne_bind` 是插件侧工作区绑定工具：
 
 | 工具 | CLI 调用 |
 |---|---|
@@ -133,7 +133,7 @@ runtime skill 固定 rank 250：可被项目/用户级同名文件覆盖，又�
 dsh-mnemosyne/
 ├── package.json          # dsh.bundle 声明；deps: schemastery；peers: dsh-tools
 ├── cordis.patch.yml      # insert 一行：id=mnemosyne, config 默认值
-├── src/index.js          # name/inject/Config/apply/SKILL；5 个 defineTool + runMnemosyne
+├── src/index.js          # name/inject/Config/apply/SKILL；6 个 defineTool + runMnemosyne
 ├── test/index.test.js    # node:test：参数组装、注册契约、skill、manifest、CLI 失败路径
 ├── docs/design.md        # 本文档
 ├── AGENTS.md / README.md / LICENSE(MIT) / .gitignore
@@ -149,7 +149,7 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 # 1) 打开 Settings > Mnemosyne，点 Setup 自动安装 CLI（uv tool install mnemosyne-memory）
 #    或手动：uv tool install mnemosyne-memory
 # 2) 点 Test connection 验证 store+delete 闭环
-# 3) 工具列表出现 mnemosyne_remember / recall / forget / stats / sleep
+# 3) 工具列表出现 mnemosyne_remember / recall / forget / stats / sleep / bind
 # 4) 技能目录出现 mnemosyne
 ```
 
@@ -157,12 +157,12 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ## 8. 测试策略
 
-测试分三层，均用 `node:test`（stdlib，零额外依赖），`pnpm test` 一并执行（当前共 117 例：96 单元 + 17 集成 + 4 client）。
+测试分三层，均用 `node:test`（stdlib，零额外依赖）；当前 `node --test` 共 153 例，包含 workspace identity、dashboard 管理和真实 CLI 集成覆盖。
 
-### 8.1 单元测试 `test/index.test.js`（96 例，无需 mnemosyne CLI）
+### 8.1 单元测试 `test/index.test.js` 与 `test/identity.test.js`（无需 mnemosyne CLI）
 
 1. `storeArgs` / `recallArgs` 位置参数组装（含可选参数缺省）；
-2. mock ctx 上 `apply()` 恰好注册 5 个预期工具，且每个都有 execute / output.schema / render；
+2. mock ctx 上 `apply()` 恰好注册 6 个预期工具，且每个都有 execute / output.schema / render；
 3. skill 注册且名字合法 kebab-case、正文含工具引用；
 4. render 输出为合法 text block 数组；
 5. CLI 缺失 → 提示 `pip install mnemosyne-memory`；非零退出 → reject；
@@ -224,7 +224,7 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 `buildEnv(config)` 负责插件调用 CLI 时的运行时环境，**只注入 `MNEMOSYNE_DATA_DIR`**（始终钉住，它是插件核心契约），外加一个例外：**写过滤器桥接**——上游 store 路径的写入过滤器（`core/filters.py`）只读 `MNEMOSYNE_IGNORE_PATTERNS` / `MNEMOSYNE_WRITE_CLASSIFIER` 环境变量，config.yaml 里的 `ignore_patterns`/`write_classifier` 键从未到达过滤器。因此 `buildEnv` 每次读取 config.yaml，把这两个键（若配置）注入 env（config.yaml > 用户基础 env），让面板 `ignorePatterns` 字段在 `remember()` 时真正过滤噪音（如 `^git `、`^pip install`、`^Traceback`；匹配即静默丢弃，返回 `Stored: None`）。`write_classifier` 不在面板白名单内，用户可手改 config.yaml 启用内置噪音/密钥/结构启发式过滤（`strict` 拒绝 / `warn` 仅记录）。mnemosyne 自身的其余配置由 `dataDir/config.yaml` 管理，文件优先级为 config.yaml > env vars > hardcoded defaults；面板直接读写 config.yaml 中的面板字段。Embedding / LLM / 召回调优 / 工作记忆等上游键**只存在于 config.yaml**，不在 `Config` schema 与 `buildEnv` 里声明，避免形成被 config.yaml 遮蔽的第二条通路；用户全局 env 里已设的 `MNEMOSYNE_*` 会被 config.yaml 未设的键保留。
 
-面板字段对应 config.yaml 的扁平顶层键：`noEmbeddings`→`no_embeddings`、`embeddingModel`→`embedding_model`、`embeddingDim`→`embedding_dim`、`embeddingApiUrl`→`embedding_api_url`、`embeddingApiKey`→`embedding_api_key`、`llmEnabled`→`llm_enabled`、`llmBaseUrl`→`llm_base_url`、`llmApiKey`→`llm_api_key`、`llmModel`→`llm_model`、`llmTimeout`→`llm_timeout`、`polyphonicRecall`→`polyphonic_recall`、`wmMaxItems`→`wm_max_items`、`wmTtlHours`→`wm_ttl_hours`、`autoSleep`→`auto_sleep_enabled`、`sleepThreshold`→`sleep_threshold`、`ignorePatterns`→`ignore_patterns`。`cli`、`defaultTopK`、`timeoutMs`、`dataDir` 及自动记忆六键（`promptSection`/`autoSync`/`autoPrefetch`/`prefetchTopK`/`prefetchMinQueryLen`/`sessionScope`）是 DSH 专用设置（运行时目录以 DSH settings 的 `dataDir` 为唯一事实源，config.yaml 不再写 `data_dir`）。
+面板字段对应 config.yaml 的扁平顶层键：`noEmbeddings`→`no_embeddings`、`embeddingModel`→`embedding_model`、`embeddingDim`→`embedding_dim`、`embeddingApiUrl`→`embedding_api_url`、`embeddingApiKey`→`embedding_api_key`、`llmEnabled`→`llm_enabled`、`llmBaseUrl`→`llm_base_url`、`llmApiKey`→`llm_api_key`、`llmModel`→`llm_model`、`llmTimeout`→`llm_timeout`、`polyphonicRecall`→`polyphonic_recall`、`wmMaxItems`→`wm_max_items`、`wmTtlHours`→`wm_ttl_hours`、`autoSleep`→`auto_sleep_enabled`、`sleepThreshold`→`sleep_threshold`、`ignorePatterns`→`ignore_patterns`。`cli`、`defaultTopK`、`timeoutMs`、`dataDir` 及自动记忆六键（`promptSection`/`autoSync`/`autoPrefetch`/`prefetchTopK`/`prefetchMinQueryLen`/`sessionScope`/`recallMode`/`autoWriteScope`）是 DSH 专用设置（运行时目录以 DSH settings 的 `dataDir` 为唯一事实源，config.yaml 不再写 `data_dir`）。
 
 `readMnemosyneConfigYaml()` 解析扁平 YAML 标量并恢复字符串、数字、布尔值和 null 类型；`ensureConfigDefaults()` 在 setup/diagnose 时只为缺失或空值补写 mnemosyne 默认值，不覆盖用户已有值。
 
@@ -282,7 +282,9 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 | `autoPrefetch` | `true` | 每个模型步骤前自动 recall、过滤并注入不可信记忆上下文 |
 | `prefetchTopK` | `5` | 自动召回注入时最多保留的记忆条数 |
 | `prefetchMinQueryLen` | `1` | DSH 兼容阈值；Hermes 的 trivial prompt gate 由宿主负责 |
-| `sessionScope` | `true` | 按 DSH 会话分区记忆（session_id 列）：每会话只召回自己的记录 + global 行；旧 default 行需迁移到 global 才能继续可见 |
+| `recallMode` | `session`（存量兼容） | 召回边界：`default`、当前 `session`，或已绑定工作区的 `workspace`；workspace 未绑定时不静默降级 |
+| `autoWriteScope` | `session`（存量兼容） | 自动记忆写入层级：`default`、当前 `session` 或已绑定工作区的 `workspace` |
+| `sessionScope` | deprecated | 无显式新 scope 时保留旧语义：`true` 为 session，`false` 为 legacy default |
 
 ### 11.2 systemPrompt.section — 静态声明段
 
@@ -321,11 +323,11 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ### 11.5 inject 变更
 
-`export const inject` 从 `["tools"]` 改为 `["tools", "agents"]`。`agents` 服务提供 `ctx.on("agent/pre-step", ...)` 事件注册能力。在 web profile 下 `agents` 是核心服务，必然存在。`systemPrompt` 通过软依赖 `ctx.get("systemPrompt")` 访问，不改 inject。
+`export const inject` 使用 `["tools", "agents", "sessions"]`。`agents` 服务提供 `ctx.on("agent/pre-step", ...)` 事件注册能力，`sessions` 用于 root session 与 workspace cwd 解析；在 web profile 下二者是核心服务。`systemPrompt` 通过软依赖 `ctx.get("systemPrompt")` 访问，不改 inject。
 
 ### 11.6 面板
 
-新增 `groupAuto`（自动记忆）配置组，包含 8 个字段：`promptSection`（toggle）、`autoSync`（toggle）、`syncTurnUserLimit`（number）、`syncTurnAssistantLimit`（number）、`autoPrefetch`（toggle）、`sessionScope`（toggle）、`prefetchTopK`（number）、`prefetchMinQueryLen`（number）。这些字段是 DSH 侧配置（不写入 config.yaml，不走 buildEnv），由 DSH settings 管理并在 turn 边界快照。组内 `sessionScope` 字段下方常驻“迁移 default 会话记忆到 global”按钮（见 §12.1）。
+新增 `groupAuto`（自动记忆）配置组，包含 prompt、sync、prefetch 和 scope 字段：`promptSection`、`autoSync`、`syncTurnUserLimit`、`syncTurnAssistantLimit`、`autoPrefetch`、`recallMode`、`autoWriteScope`、`prefetchTopK`、`prefetchMinQueryLen`。这些字段是 DSH 侧配置（不写入 config.yaml，不走 buildEnv），由 DSH settings 管理并在 turn 边界快照；旧 `sessionScope` 作为 deprecated 兼容别名。workspace 模式要求显式绑定 `.mnemosyne-id`。
 
 ### 11.7 测试
 
@@ -339,15 +341,16 @@ dsh plugin --profile web add dsh-mnemosyne        # npm 包；开发期可 add <
 
 ## 12. 会话隔离（sessionScope，v0.4）
 
-CLI 的 store/recall 没有会话参数，所有路径都落在默认 `session_id='default'`。为对齐 Hermes Provider 的 session-scoped 默认语义，新增 `sessionScope`（默认 true，开启后隔离生效）。显式关闭仍可恢复 legacy shared-default 行为；升级已有安装时应先迁移 default 行到 global，避免历史记忆暂时不可见。
+CLI 的 store/recall 没有会话参数，workspace/session 路径通过 CLI venv helper 显式传入 namespace。新安装可选择 workspace/workspace；存量配置通过 deprecated `sessionScope` 保持原 session/default 语义，用户显式切换后再启用 workspace。升级时 legacy default 与旧 session 行均不自动改写，迁移必须由用户在管理区确认。
 
 ### 12.1 session_id 派生与迁移
 
 - `deriveSessionSid()`：形如 `session-<uuid>` 的持久 id 原样加 `dsh_` 前缀。`session-<n>` 计数器形 id 在 DSH 持久化恢复后会保留原 id（`header.createdAt` 同样持久化），因此 sid 派生自 **session header 的 `createdAt`**（`dsh_<id>_<createdAt>`）：恢复的会话跨 DSH 重启保持同一 sid，记忆不丢；同 id 的新建会话 createdAt 必不同，不会撞名。（不能用每 boot 随机 uuid——会让恢复会话的旧记忆变成孤儿。）
 - `findRootSession()`：沿 `header.parentSession` 链走到根会话——子代理归入其根会话，委托工作共享主会话记忆（有意设计，非缺陷）。
 - 会话对象经 WeakMap 绑定 sid，不持有强引用；fiber 销毁后 GC，下次事件重新绑定。
-- **迁移（default → global）**：历史 `default` 会话记忆在隔离下不可见（recall 只命中 `session_id = ? OR scope = 'global'`）。面板按钮调用 `POST /mnemosyne/migrate-default-session`，经 venv python 直连 SQLite，把 `working_memory`/`episodic_memory` 中 `session_id='default'` 且非 global 的行翻转为 `scope='global'`（事务 + 回滚，内容不变）。triples 表无 session_id/scope，天然共享，无需迁移。
-- **反向迁移（dsh session → default）**：关闭 `sessionScope` 前可用面板按钮调用 `POST /mnemosyne/migrate-session-scopes-to-default`，把 `dsh_*` 的 session 行合并到 legacy `default`。该动作会丢失原会话归属，必须显式确认。
+- **迁移（default → global）**：历史 `default` 会话记忆在隔离下不可见（recall 只命中 `session_id = ? OR scope = 'global'`）。记忆浏览器管理区调用 `POST /mnemosyne/migrate-default-session`，经 venv python 直连 SQLite，把 `working_memory`/`episodic_memory` 中 `session_id='default'` 且非 global 的行翻转为 `scope='global'`（事务 + 回滚，内容不变）。triples 表无 session_id/scope，天然共享，无需迁移。
+- **反向迁移（dsh session → default）**：关闭 `sessionScope` 前可在记忆浏览器管理区调用 `POST /mnemosyne/migrate-session-scopes-to-default`，把 `dsh_*` 的 session 行合并到 legacy `default`。该动作会丢失原会话归属，必须显式确认。
+- **工作区管理**：记忆浏览器管理区调用 `/mnemosyne/workspaces` 查询绑定与候选，使用 `/mnemosyne/workspaces/bind` 或 `/adopt` 写入 marker/index；工作区迁移调用 `/migrate`，先 dry-run，再执行并创建 `backups/` 快照，支持使用该快照 revert。
 
 ### 12.2 venv python 直驱 helper
 
@@ -359,13 +362,13 @@ CLI 无会话参数，因此 `SESSION_HELPER`（`mnemosyne_session_helper.py`，
 
 ### 12.3 整合路径
 
-- `mnemosyne_sleep` 在 sessionScope 下默认只整合当前 session；需要全库整合时使用显式的面板/CLI 入口。自动 sleep 只整合触发它的当前会话，避免后台任务改变其他 profile 的活跃上下文。
+- `mnemosyne_sleep` 在 session/workspace scope 下默认只整合当前目标 namespace；需要全库整合时使用显式的面板/CLI 入口。自动 sleep 只整合触发它的当前 namespace，避免后台任务改变其他 profile 的活跃上下文。
 - `mnemosyne_stats` 与面板统计为全库计数，不按会话区分（工具语义如此，属预期）。
 
 ### 12.4 依赖与边界
 
 - 会话路径依赖 CLI shebang 解析出的 python；绝对解释器与 `#!/usr/bin/env python3` 形式都支持。
-- 升级后 legacy `default` 记忆在 sessionScope 默认开启时不可见——面板 hint 与 README 均提示迁移到 global；显式关闭 sessionScope 的旧配置不受影响。
+- 存量升级默认保留 legacy `sessionScope` 语义；`default` 记忆不会自动迁移。workspace 共享需显式绑定 marker 并切换 `recallMode`/`autoWriteScope`，旧配置不会被静默改写。
 - **global 是所有会话的共享命名空间，可读可写**：任何会话都能 recall 到 global 行，也能 delete 它们（engine 的 forget SQL 是 `session_id = ? OR scope = 'global'`）。这是上游语义，插件不额外做删除保护；需要只读公共记忆时别用 global。
 - **`cross_session` 被会话 helper 强制关闭**：上游 config.yaml 的该键不会扩大 sessionScope 的 recall 范围。
 

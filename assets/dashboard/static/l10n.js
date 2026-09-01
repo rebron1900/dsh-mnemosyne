@@ -102,6 +102,19 @@
          "Memory browser": "记忆浏览器",
          "Recall debug": "召回调试",
          "working + episodic": "工作记忆 + 情景记忆",
+         "memory browser + recall debug": "记忆浏览器 + 召回调试",
+         "MEMORY BROWSER + RECALL DEBUG": "记忆浏览器 + 召回调试",
+         "working": "工作记忆",
+         "episodic": "情景记忆",
+         "tool": "工具",
+         "imported": "导入",
+         "hot · full detail": "热 · 完整详情",
+         "warm · compressed": "温 · 已压缩",
+         "cold · key signal": "冷 · 关键信号",
+         "needs review": "待审阅",
+         "hot · full detail": "热 · 完整详情",
+         "warm · compressed": "温 · 已压缩",
+         "cold · key signal": "冷 · 关键信号",
          "Search memory content…": "搜索记忆内容…",
          "all tiers": "全部层级",
          "all sources": "全部来源",
@@ -115,14 +128,34 @@
          "all statuses": "全部状态",
          "newest": "最新",
          "oldest": "最早",
+         "importance": "重要性",
          "recall count": "召回次数",
          "Select visible": "选择当前列表",
          "0 selected": "已选择 0 项",
+         "Select all in current list": "选择当前列表中的全部记忆",
+         "selected from current list": "项已从当前列表选中",
+         "Move to": "移动到",
+         "choose scope": "选择作用域",
+         "global": "全局",
+         "filtered session": "筛选出的会话",
+         "workspace": "工作区",
+         "default": "默认",
+         "Workspace target": "工作区目标",
+         "Choose a workspace": "选择工作区",
+         "Move selected": "移动所选记忆",
          "Expire selected": "使所选记忆过期",
          "Set trust": "设置可信度",
          "Set expiry": "设置有效期",
          "Set importance": "设置重要性",
          "Clear selection": "清除选择",
+         "Batch memory actions": "批量记忆操作",
+         "Filter the list first, then select individual memories or use “Select all in current list”. Batch actions apply only to selected active memories.": "先筛选列表，再单独选择记忆或使用“选择当前列表中的全部记忆”。批量操作只作用于选中的活跃记忆。",
+         "Select at least one active memory from the current list.": "请从当前列表至少选择一条活跃记忆。",
+         "Choose a target scope first.": "请先选择目标作用域。",
+         "Choose a workspace target first.": "请先选择工作区目标。",
+         "selected memories updated.": "条所选记忆已更新。",
+         "Batch action failed:": "批量操作失败：",
+         "Apply batch action": "应用批量操作",
          "Type a recall query…": "输入召回查询…",
          "why memories rank": "记忆排序原因",
          "Filter timeline…": "筛选时间线…",
@@ -290,6 +323,10 @@
       function localizeNode(node) {
         if (!DICT) return;
         if (!node || node.nodeType !== 1) return;
+        var explicit = node.getAttribute && node.getAttribute("data-i18n");
+        if (explicit && DICT[explicit]) setText(node, DICT[explicit]);
+        var ariaKey = node.getAttribute && node.getAttribute("data-i18n-aria-label");
+        if (ariaKey && DICT[ariaKey]) node.setAttribute("aria-label", DICT[ariaKey]);
         if (node.tagName === "INPUT" && node.placeholder) {
           var ph = DICT[node.placeholder];
           if (ph && node.placeholder !== ph) node.placeholder = ph;
@@ -325,7 +362,7 @@
           ".card .label", ".toolbar button", ".quick-actions button",
           "#liveMemoryStatus", ".state-card h3", ".state-card p", ".muted",
           ".app-footer", ".kind-badge", ".role", ".drawer-title",
-          ".section-tabs button", ".tiny", "button.primary"
+          ".section-tabs button", ".tiny", "button.primary", "[data-i18n]", "[data-i18n-aria-label]"
         ].join(",");
         document.querySelectorAll(selectors).forEach(function (el) { localizeNode(el); });
          if (DICT && DICT[document.title]) document.title = DICT[document.title];
@@ -339,7 +376,38 @@
            if (raw && translated !== raw) textNode.textContent = textNode.textContent.replace(raw, translated);
          }
       }
-      window.__mnemoL10n = { LANG: LANG, localize: localizeAll };
+      window.__mnemoL10n = {
+        LANG: LANG,
+        localize: localizeAll,
+        text: function (value) { return translateText(value); },
+        selectedStatus: function (selected, active) {
+          return LANG === "zh" ? "当前列表已选择 " + selected + " 项 · " + active + " 项活跃" : selected + " selected from current list · " + active + " active";
+        },
+        updatedStatus: function (count) {
+          return LANG === "zh" ? count + " 条所选记忆已更新。" : count + " selected memories updated.";
+        },
+        errorStatus: function (message) {
+          return LANG === "zh" ? "批量操作失败：" + message : "Batch action failed: " + message;
+        },
+        workspaceOption: function (name, count) {
+          return LANG === "zh" ? name + " · " + count + " 条记忆" : name + " · " + count + " memories";
+        },
+        batchConfirmTitle: function (count) {
+          return LANG === "zh" ? "应用到 " + count + " 条所选记忆？" : "Apply to " + count + " selected memories?";
+        },
+        batchDescription: function (value) {
+          if (LANG !== "zh") return value;
+          var move = String(value || "").match(/^Move the selected active memories to the (.+) scope\.$/);
+          if (move) return "将选中的活跃记忆移动到“" + (DICT[move[1]] || move[1]) + "”作用域。";
+          var map = {
+            "Expire the selected active memories. Their original records remain available in history.": "使选中的活跃记忆过期。原始记录仍保留在历史记录中。",
+            "Set the same importance value on every selected active memory.": "为每条选中的活跃记忆设置相同的重要性。",
+            "Set the same trust value on every selected active memory.": "为每条选中的活跃记忆设置相同的可信度。",
+            "Set or clear the expiry date on every selected active memory.": "为每条选中的活跃记忆设置或清除有效期。"
+          };
+          return map[value] || value;
+        }
+      };
       document.addEventListener("DOMContentLoaded", function () {
         localizeAll();
         if (!DICT) return;

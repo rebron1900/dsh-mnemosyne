@@ -52,6 +52,11 @@ import {
   countConsolidations,
   resolveSleepThreshold,
   shouldRunSessionEndSleep,
+  normalizeMemoryScopes,
+  listMemoryNamespaces,
+  listWorkspaceBindings,
+  bindWorkspaceDirectory,
+  mutateDashboardMemories,
 } from "../src/index.js";
 
 // Unit tests must not read the developer's real ~/.dsh/settings.yaml
@@ -186,7 +191,7 @@ describe("session scoping helpers", () => {
 });
 
 describe("plugin apply()", () => {
-  it("registers exactly the five mnemosyne tools", () => {
+  it("registers exactly the six mnemosyne tools", () => {
     const { ctx, tools } = createMockCtx();
     apply(ctx, {});
     assert.deepEqual(
@@ -197,6 +202,7 @@ describe("plugin apply()", () => {
         "mnemosyne_forget",
         "mnemosyne_stats",
         "mnemosyne_sleep",
+        "mnemosyne_bind",
       ]
     );
     for (const tool of tools) {
@@ -888,6 +894,51 @@ describe("panel HTTP routes", () => {
     assert.ok(!raw.includes("sk-live-3"));
   });
 
+  it("selected-memory batch route updates only requested records", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "mnemosyne-dashboard-data-"));
+    createDashboardDb(dataDir);
+    const handlers = createRouteCtxAll({ dataDir });
+    const batch = await callRoute(handlers["/mnemosyne/dashboard/api/admin/memory/batch"], jsonReq("POST", { action: "importance", ids: ["w1"], value: "0.25", backup: false }));
+    assert.equal(batch.status, 200);
+    assert.equal(batch.body.updated, 1);
+    const db = join(dataDir, "mnemosyne.db");
+    const check = execFileSync("python3", ["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('SELECT importance FROM working_memory WHERE id=\\\"w1\\\"').fetchone()[0])", db], { encoding: "utf8" });
+    assert.equal(Number(check.trim()), 0.25);
+    const invalid = await callRoute(handlers["/mnemosyne/dashboard/api/admin/memory/batch"], jsonReq("POST", { action: "importance", ids: ["w1"], value: "2" }, { origin: "http://evil.example" }));
+    assert.equal(invalid.status, 403);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("dashboard workspace routes bind projects and enforce same-origin writes", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "mnemosyne-dashboard-data-"));
+    const project = mkdtempSync(join(tmpdir(), "mnemosyne-dashboard-project-"));
+    const handlers = createRouteCtxAll({ dataDir });
+    const bind = await callRoute(handlers["/mnemosyne/workspaces/bind"], jsonReq("POST", { targetCwd: project }));
+    assert.equal(bind.status, 200);
+    assert.equal(bind.body.ok, true);
+    assert.equal(bind.body.entry.canonicalPath, project);
+    assert.match(readFileSync(join(project, ".mnemosyne-id"), "utf8"), /mnemosyne-workspace-v1:/);
+    const listed = await callRoute(handlers["/mnemosyne/workspaces"], jsonReq("GET"));
+    assert.equal(listed.status, 200);
+    assert.equal(listed.body.workspaces.bound.length, 1);
+    const crossSite = await callRoute(handlers["/mnemosyne/workspaces/bind"], jsonReq("POST", { targetCwd: project }, { origin: "http://evil.example" }));
+    assert.equal(crossSite.status, 403);
+    rmSync(project, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("workspace migration route rejects unbound or malformed targets", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "mnemosyne-dashboard-data-"));
+    const handlers = createRouteCtxAll({ dataDir });
+    const malformed = await callRoute(handlers["/mnemosyne/workspaces/migrate"], jsonReq("POST", { targetNamespace: "default", action: "dry-run" }));
+    assert.equal(malformed.status, 400);
+    assert.match(malformed.body.error, /invalid workspace namespace/);
+    const invalidJson = await callRoute(handlers["/mnemosyne/workspaces/migrate"], rawReq("POST", "{"));
+    assert.equal(invalidJson.status, 400);
+    assert.match(invalidJson.body.error, /invalid JSON/);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("migrate route reports ok:false without a usable CLI", async () => {
     const handlers = createRouteCtxAll({ dataDir: dir, cli: "definitely-not-a-cli-xyz" });
     const migrate = handlers["/mnemosyne/migrate-default-session"];
@@ -911,6 +962,28 @@ describe("panel HTTP routes", () => {
     assert.match(DEFAULT_TO_GLOBAL_SQL("episodic_memory"), /UPDATE episodic_memory/);
     assert.match(SCOPED_TO_DEFAULT_SQL("working_memory"), /session_id='default'/);
     assert.match(SCOPED_TO_DEFAULT_SQL("working_memory"), /session_id GLOB 'dsh_\*'/);
+  });
+});
+
+describe("dashboard workspace management", () => {
+  it("binds a safe project directory once and reuses its marker namespace", () => {
+    const project = mkdtempSync(join(tmpdir(), "mnemosyne-dashboard-project-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "mnemosyne-dashboard-data-"));
+    const first = bindWorkspaceDirectory({ dataDir, targetCwd: project });
+    const second = bindWorkspaceDirectory({ dataDir, targetCwd: project });
+    assert.equal(first.created, true);
+    assert.equal(second.created, false);
+    assert.equal(first.entry.namespace, second.entry.namespace);
+    assert.match(readFileSync(join(project, ".mnemosyne-id"), "utf8"), /mnemosyne-workspace-v1:/);
+    rmSync(project, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("rejects home and filesystem-root binding targets", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "mnemosyne-dashboard-data-"));
+    assert.throws(() => bindWorkspaceDirectory({ dataDir, targetCwd: homedir() }), /invalid target workspace/);
+    assert.throws(() => bindWorkspaceDirectory({ dataDir, targetCwd: "/" }), /invalid target workspace/);
+    rmSync(dataDir, { recursive: true, force: true });
   });
 });
 

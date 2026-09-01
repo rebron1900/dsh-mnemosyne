@@ -49,6 +49,7 @@ describe("client module", () => {
     assert.equal(typeof mod.name, "string");
     assert.ok(Array.isArray(mod.inject));
     assert.deepEqual(mod.inject, ["settingsScope", "slots", "locale"]);
+    assert.doesNotMatch(clientSrc, /dsh-client-runtime/);
   });
 
   it("apply registers a locale dictionary and a settings.section slot", () => {
@@ -88,7 +89,7 @@ describe("client module", () => {
   });
 
   it("registers a single read-only dashboard tab when Better Sidebar is available", () => {
-    const registered = { locale: [], tabs: [], opened: [] };
+    const registered = { locale: [], tabs: [], pluginItems: [], opened: [] };
     const sidebar = {
       registerTab: (tab) => { registered.tabs.push(tab); return () => {}; },
       openTab: (seed) => registered.opened.push(seed),
@@ -96,6 +97,18 @@ describe("client module", () => {
     const ctx = {
       effect: (fn) => fn(),
       get: (key) => key === "betterSidebar" ? sidebar : undefined,
+      inject: (deps, callback) => {
+        if (deps[0] === "settingsScope") callback({
+          slots: {
+            inject: (slot, gen) => {
+              if (slot === "settings.plugin.item") {
+                registered.pluginItems.push(gen().opts);
+              }
+            },
+            register: (opts, render) => ({ opts, render }),
+          },
+        });
+      },
       locale: {
         register: (ns, dict) => { registered.locale.push({ ns, dict }); },
         bind: (ns) => (key) => `[${ns}]${key}`,
@@ -130,6 +143,26 @@ describe("client module", () => {
     assert.equal(iframe.props.src, "/mnemosyne/dashboard/?lang=en", "iframe passes the host language");
     assert.ok(registered.locale[0].dict.zh.dashboardTitle);
     assert.ok(registered.locale[0].dict.en.dashboardTitle);
+    assert.doesNotMatch(clientSrc, /renderMigrateRow|renderWorkspaceCard|migrate-default-session/);
+    const dashboardHtml = readFileSync(new URL("../assets/dashboard/index.html", import.meta.url), "utf8");
+    const dashboardJs = readFileSync(new URL("../assets/dashboard/static/app.js", import.meta.url), "utf8");
+    for (const id of ["memoryQuery", "memoryKind", "memorySource", "memoryScope", "memorySession", "memoryVeracity", "memoryStatus", "memorySearch", "memoryList", "bulkSelectAll", "bulkScope", "bulkWorkspaceTarget", "bulkMove", "bulkExpire", "bulkVeracity", "bulkExpiry", "bulkImportance", "bulkClear", "bulkActionStatus"]) {
+      assert.match(dashboardHtml, new RegExp(`id=["']${id}["']`));
+    }
+    assert.doesNotMatch(dashboardHtml, /memoryManagement|workspaceMigration|migrateDefaultGlobal/);
+    assert.match(dashboardHtml, /class="toolbar glass"[\s\S]*id="bulkMemoryBar"/);
+    assert.match(dashboardHtml, /data-i18n="Select all in current list"/);
+    assert.match(dashboardJs, /selectedMutableIds\(\)/);
+    assert.match(dashboardJs, /admin\/memory\/batch/);
+    assert.match(dashboardJs, /bulkSelection\.clear\(\)/);
+    assert.match(dashboardJs, /bulkSelectedStatus/);
+    assert.match(dashboardJs, /function updateBulkScopeControl/);
+    assert.match(dashboardJs, /target\.disabled=!enabled/);
+    assert.match(dashboardHtml, /id="bulkWorkspaceTarget"[^>]*disabled/);
+    const dashboardL10n = readFileSync(new URL("../assets/dashboard/static/l10n.js", import.meta.url), "utf8");
+    assert.match(dashboardL10n, /Select all in current list.*选择当前列表中的全部记忆/);
+    assert.match(dashboardL10n, /batchConfirmTitle/);
+    assert.equal(registered.pluginItems.length, 0);
   });
 
   it("registers the dashboard tab lazily when Better Sidebar appears after apply", () => {
@@ -160,6 +193,8 @@ describe("client module", () => {
 
   it("declares Hermes-compatible sync length controls", () => {
     assert.match(clientSrc, /key: "syncTurnUserLimit"/);
+    assert.match(clientSrc, /key: "recallMode"/);
+    assert.match(clientSrc, /options: \["default", "session", "workspace"\]/);
     assert.match(clientSrc, /key: "syncTurnAssistantLimit"/);
     assert.match(clientSrc, /syncTurnUserLimit: 500/);
     assert.match(clientSrc, /syncTurnAssistantLimit: 800/);

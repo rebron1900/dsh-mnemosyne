@@ -63,24 +63,15 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_syncTurnAssistantLimit_hint: "自动同步保存的 assistant 最大字符数，默认 800，与 Hermes 一致；设为 0 表示不截断。仅在 sync_roles 包含 assistant 时生效。",
       f_autoPrefetch: "自动召回注入",
       f_autoPrefetch_hint: "每个模型步骤前自动 recall 相关记忆并注入对话流；预取会过滤 assistant transcript、低质量和缺少主题/词法证据的结果。",
-      f_sessionScope: "会话隔离",
-      f_sessionScope_hint: "按 DSH 会话分区记忆；每个会话只召回自己的 session 记录和 global 记录。旧 default 会话数据在升级后需要迁移到 global 才能继续可见。",
-      migrate: "迁移 default 会话记忆到 global",
-      migrateHint: "把历史 'default' 会话的记忆转为 global 作用域（所有会话可见）。升级到默认会话隔离后使用；迁移不改动内容、不删除任何记忆。",
-      migrateConfirm: "确认将 default 会话下的全部记忆转为 global 作用域？此操作可逆（仅改动库中的 scope 字段），不会删除任何记忆。",
-      migrateGo: "迁移",
-      migrateBusy: "迁移中…",
-      migrateDone: "已迁移",
-      migrateNone: "无需迁移（default 会话下没有非 global 记忆）",
-      migrateFail: "迁移失败",
-      migrateBack: "将 session-scoped 记忆迁回 default",
-      migrateBackHint: "关闭会话隔离时使用：把所有 dsh_* 会话记忆（scope='session'）迁回 'default' 共享命名空间，恢复关闭隔离前的可见性。反向操作需要先确认没有两个会话需要拆分。",
-      migrateBackConfirm: "确认将全部 session-scoped 记忆迁回 'default' 共享命名空间？此操作不可逆（已脱离原会话归属），仅改动库中的 session_id/scope 字段，不删除任何记忆。",
-      migrateBackGo: "迁回",
-      migrateBackBusy: "迁回中…",
-      migrateBackDone: "已迁回",
-      migrateBackNone: "无需迁回（没有 dsh_* 会话记忆）",
-      migrateBackFail: "迁回失败",
+       f_memoryMode: "记忆范围",
+
+
+
+
+       f_memoryMode_default: "default（共享）",
+       f_memoryMode_session: "session（会话）",
+       f_memoryMode_workspace: "workspace（工作区）",
+       f_memoryMode_hint: "选择记忆按 default 共享池、当前 session，或当前工作区隔离。workspace 模式需要先绑定 .mnemosyne-id。",
       f_prefetchTopK: "召回数量",
       f_prefetchTopK_hint: "自动召回注入时返回的记忆条数。增多可看到更多先验，但引入更多噪声。",
       f_prefetchMinQueryLen: "最小查询长度",
@@ -158,6 +149,10 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       depsReindexBlocked: "请先保存或放弃未保存的修改，再重建索引",
        dashboardOpen: "打开记忆面板",
        dashboardTitle: "记忆面板",
+       extensionTitle: "Mnemosyne 记忆",
+       extensionDesc: "本地优先的跨会话记忆层。",
+       extensionOpen: "打开记忆面板",
+       extensionUnavailable: "需要先安装 Better Sidebar 才能打开记忆面板。",
        dashboardReadOnly: "只读",
        dashboardOverview: "总览",
        dashboardToday: "今日",
@@ -238,24 +233,11 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       f_syncTurnAssistantLimit_hint: "Maximum assistant characters stored by auto-sync. Defaults to 800 for Hermes parity; set 0 to disable truncation. Applies only when sync_roles includes assistant.",
       f_autoPrefetch: "Auto-prefetch",
       f_autoPrefetch_hint: "Recall relevant memories before each model step and inject them into the conversation; prefetch filters assistant transcripts, low-quality rows, and rows without topical/lexical evidence.",
-      f_sessionScope: "Session isolation",
-      f_sessionScope_hint: "Partition memories per DSH session; each session recalls its own session rows plus global rows. Existing default-session rows need migration to global after upgrade to remain visible.",
-      migrate: "Migrate default-session memories to global",
-      migrateHint: "Convert legacy 'default'-session memories to global scope (visible to all sessions). Use after upgrading to the session-scoped default; contents are unchanged and nothing is deleted.",
-      migrateConfirm: "Convert all 'default'-session memories to global scope? Reversible (scope column only), no memory is deleted.",
-      migrateGo: "Migrate",
-      migrateBusy: "Migrating…",
-      migrateDone: "Migrated",
-      migrateNone: "Nothing to migrate (no non-global rows in the 'default' session)",
-      migrateFail: "Migration failed",
-      migrateBack: "Migrate session-scoped memories back to default",
-      migrateBackHint: "Use when turning session isolation off: move all dsh_* session memories (scope='session') back into the 'default' shared namespace so they become visible again without the plugin's session mapping. Confirm that no two sessions need to stay split before running.",
-      migrateBackConfirm: "Move all session-scoped memories back to the 'default' shared namespace? Not reversible (rows lose their session ownership); only session_id/scope columns change, no memory is deleted.",
-      migrateBackGo: "Migrate back",
-      migrateBackBusy: "Migrating back…",
-      migrateBackDone: "Migrated back",
-      migrateBackNone: "Nothing to migrate back (no dsh_* session memories)",
-      migrateBackFail: "Migration back failed",
+      f_memoryMode: "Memory scope",
+       f_memoryMode_default: "default (shared)",
+       f_memoryMode_session: "session",
+       f_memoryMode_workspace: "workspace",
+       f_memoryMode_hint: "Choose default shared memory, the current session, or the current workspace. Workspace mode requires .mnemosyne-id.",
       f_prefetchTopK: "Prefetch top-K",
       f_prefetchTopK_hint: "Number of memories to recall for auto-prefetch injection. Higher shows more prior context but adds noise.",
       f_prefetchMinQueryLen: "Min query length",
@@ -333,7 +315,11 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       depsReindexBlocked: "Save or discard unsaved changes before reindexing",
       dashboardOpen: "Open memory dashboard",
       dashboardTitle: "Memory dashboard",
-      dashboardReadOnly: "Read only",
+      extensionTitle: "Mnemosyne Memory",
+       extensionDesc: "A local-first memory layer for conversations across sessions.",
+       extensionOpen: "Open memory dashboard",
+       extensionUnavailable: "Install Better Sidebar to open the memory dashboard.",
+       dashboardReadOnly: "Read only",
       dashboardOverview: "Overview",
       dashboardToday: "Today",
       dashboardMemories: "Memories",
@@ -400,7 +386,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     { group: "groupAuto", key: "syncTurnUserLimit", type: "number", label: "f_syncTurnUserLimit", hint: "f_syncTurnUserLimit_hint" },
     { group: "groupAuto", key: "syncTurnAssistantLimit", type: "number", label: "f_syncTurnAssistantLimit", hint: "f_syncTurnAssistantLimit_hint" },
     { group: "groupAuto", key: "autoPrefetch", type: "toggle", label: "f_autoPrefetch", hint: "f_autoPrefetch_hint" },
-    { group: "groupAuto", key: "sessionScope", type: "toggle", label: "f_sessionScope", hint: "f_sessionScope_hint" },
+    { group: "groupAuto", key: "recallMode", type: "select", label: "f_memoryMode", hint: "f_memoryMode_hint", options: ["default", "session", "workspace"] },
     { group: "groupAuto", key: "prefetchTopK", type: "number", label: "f_prefetchTopK", hint: "f_prefetchTopK_hint" },
     { group: "groupAuto", key: "prefetchMinQueryLen", type: "number", label: "f_prefetchMinQueryLen", hint: "f_prefetchMinQueryLen_hint" },
   ];
@@ -439,7 +425,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     autoPrefetch: true,
     prefetchTopK: 5,
     prefetchMinQueryLen: 1,
-    sessionScope: true,
+    recallMode: "session",
   };
 
   // Known embedding model → output dimension. Used to auto-fill embedding_dim
@@ -576,7 +562,6 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const [diag, setDiag] = useState(null);
     const [busy, setBusy] = useState(null);
     const [msg, setMsg] = useState(null);
-    const [migrateMsg, setMigrateMsg] = useState(null);
     const [yamlConfig, setYamlConfig] = useState({});
     const [modelPickerOpen, setModelPickerOpen] = useState(false);
     const [modelChoice, setModelChoice] = useState("");
@@ -584,9 +569,8 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     const modelPickerTriggerRef = useRef(null);
     const modelModalRef = useRef(null);
     const [reindex, setReindex] = useState({ running: false, done: false, error: null });
-
     const refresh = useCallback(async () => {
-      setBusy("diag"); setMsg(null); setMigrateMsg(null);
+      setBusy("diag"); setMsg(null);
       try {
         const [diagRes, cfgRes] = await Promise.all([
           fetch("/mnemosyne/diagnose", { headers: { accept: "application/json" } }).then(r => r.json()),
@@ -601,7 +585,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     useEffect(() => { refresh(); }, [refresh]);
 
     const setup = async () => {
-      setBusy("setup"); setMsg(null); setMigrateMsg(null);
+      setBusy("setup"); setMsg(null);
       try {
         const r = await fetch("/mnemosyne/setup", { method: "POST" });
         const data = await r.json();
@@ -612,7 +596,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     };
 
     const installEmbedding = async () => {
-      setBusy("deps"); setMsg(null); setMigrateMsg(null);
+      setBusy("deps"); setMsg(null);
       try {
         const r = await fetch("/mnemosyne/install-embedding", { method: "POST" });
         const data = await r.json();
@@ -675,7 +659,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       }
       const model = modelChoice === "custom" ? modelCustom.trim() : modelChoice;
       if (!model) return;
-      setBusy("model"); setMsg(null); setMigrateMsg(null);
+      setBusy("model"); setMsg(null);
       try {
         // Auto-fill the embedding dimension for known models so switching
         // models doesn't leave a stale dim (e.g. zh model is 512d, not 384d).
@@ -708,7 +692,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         return;
       }
       setReindex({ running: true, done: false, error: null });
-      setMsg(null); setMigrateMsg(null);
+      setMsg(null);
       try {
         const r = await fetch("/mnemosyne/reindex", {
           method: "POST",
@@ -746,7 +730,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     }, [reindex.running]);
 
     const test = async () => {
-      setBusy("test"); setMsg(null); setMigrateMsg(null);
+      setBusy("test"); setMsg(null);
       try {
         const r = await fetch("/mnemosyne/test", { method: "POST" });
         const data = await r.json();
@@ -760,44 +744,6 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           setMsg(t("testFail") + ": " + (data.error || ""));
         }
       } catch (e) { setMsg(t("testFail") + ": " + String(e?.message ?? e)); }
-      finally { setBusy(null); }
-    };
-
-    const migrate = async () => {
-      if (typeof window !== "undefined" && !window.confirm(t("migrateConfirm"))) return;
-      setBusy("migrate"); setMigrateMsg(null); setMsg(null);
-      try {
-        const r = await fetch("/mnemosyne/migrate-default-session", { method: "POST" });
-        const data = await r.json();
-        if (data.ok) {
-          setMigrateMsg(
-            data.migrated > 0
-              ? `${t("migrateDone")} ${data.migrated} (working ${data.working} / episodic ${data.episodic})`
-              : t("migrateNone")
-          );
-        } else {
-          setMigrateMsg(t("migrateFail") + ": " + (data.error || ""));
-        }
-      } catch (e) { setMigrateMsg(t("migrateFail") + ": " + String(e?.message ?? e)); }
-      finally { setBusy(null); }
-    };
-
-    const migrateBack = async () => {
-      if (typeof window !== "undefined" && !window.confirm(t("migrateBackConfirm"))) return;
-      setBusy("migrateBack"); setMigrateMsg(null); setMsg(null);
-      try {
-        const r = await fetch("/mnemosyne/migrate-session-scopes-to-default", { method: "POST" });
-        const data = await r.json();
-        if (data.ok) {
-          setMigrateMsg(
-            data.migrated > 0
-              ? `${t("migrateBackDone")} ${data.migrated} (working ${data.working} / episodic ${data.episodic})`
-              : t("migrateBackNone")
-          );
-        } else {
-          setMigrateMsg(t("migrateBackFail") + ": " + (data.error || ""));
-        }
-      } catch (e) { setMigrateMsg(t("migrateBackFail") + ": " + String(e?.message ?? e)); }
       finally { setBusy(null); }
     };
 
@@ -877,6 +823,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           } else {
             if (typeof scope.set !== "function") throw new Error("settings scope cannot set");
             await scope.set(key, settingsDrafts[key]);
+             if (key === "recallMode") await scope.set("autoWriteScope", settingsDrafts[key]);
             if (!scopeSetConfirmed(key, settingsDrafts[key])) throw new Error("settings write was not confirmed");
           }
         } catch { failed.push(key); }
@@ -922,7 +869,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
 
     const resetAll = async () => {
       setSaving(true); setFailedFields([]);
-      const dshFields = FIELDS.filter((f) => !f.yaml);
+      const dshFields = [...FIELDS.filter((f) => !f.yaml), { key: "autoWriteScope" }];
       const yamlFields = FIELDS.filter((f) => f.yaml);
       const succeeded = [];
       const failed = [];
@@ -996,7 +943,23 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
           ),
         );
       }
-      const inputType = f.type === "number" ? "number" : f.secret ? "password" : "text";
+      if (f.type === "select") {
+         return h("div", { className: "mn-field", key: f.key },
+           h("div", { className: "mn-field-left" },
+             h("div", { className: "mn-field-head" },
+               h("label", { className: "mn-label", htmlFor: inputId }, t(f.label)), hintIcon,
+               isOverridden ? h("button", { type: "button", className: "mn-btn", style: { padding: "2px 8px", fontSize: 11 }, onClick: () => resetField(f.key) }, t("reset")) : null,
+             ),
+           ),
+           h("div", { className: "mn-field-right" },
+             h("select", {
+               id: inputId, className: "mn-input", value: val || "session", "aria-describedby": hintId,
+               onChange: (e) => setDraft(f.key, e.target.value),
+             }, ...(f.options || []).map((option) => h("option", { key: option, value: option }, t("f_memoryMode_" + option)))),
+           ),
+         );
+       }
+       const inputType = f.type === "number" ? "number" : f.secret ? "password" : "text";
       const inputProps = {
         id: inputId,
         className: "mn-input" + (f.type === "area" ? " mn-area" : ""),
@@ -1042,49 +1005,6 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       );
     };
 
-    // Migrate row shown inside the 自动记忆 card, right under 会话隔离:
-    // converts legacy "default"-session memories to global scope.
-    const renderMigrateRow = () => h("div", { className: "mn-field", key: "migrate-default" },
-      h("div", { className: "mn-field-left" },
-        h("div", { className: "mn-field-head" },
-          h("label", { className: "mn-label" }, t("migrate")),
-          h("span", { className: "mn-help", tabIndex: 0, "aria-label": t("migrateHint") },
-            "?",
-            h("span", { className: "mn-tooltip", role: "note" }, t("migrateHint")),
-          ),
-        ),
-      ),
-      h("div", { className: "mn-field-right" },
-        h("button", {
-          type: "button",
-          className: "mn-btn mn-deps-btn",
-          disabled: !!busy || !diag?.cliReady,
-          onClick: migrate,
-        }, busy === "migrate" ? t("migrateBusy") : t("migrateGo")),
-      ),
-    );
-
-    const renderMigrateBackRow = () => h("div", { className: "mn-field", key: "migrate-back" },
-      h("div", { className: "mn-field-left" },
-        h("div", { className: "mn-field-head" },
-          h("label", { className: "mn-label" }, t("migrateBack")),
-          h("span", { className: "mn-help", tabIndex: 0, "aria-label": t("migrateBackHint") },
-            "?",
-            h("span", { className: "mn-tooltip", role: "note" }, t("migrateBackHint")),
-          ),
-        ),
-      ),
-      h("div", { className: "mn-field-right" },
-        h("button", {
-          type: "button",
-          className: "mn-btn mn-deps-btn",
-          disabled: !!busy || !diag?.cliReady,
-          onClick: migrateBack,
-        }, busy === "migrateBack" ? t("migrateBackBusy") : t("migrateBackGo")),
-        // Result shown through migrateMsg (shared with the default→global row)
-      ),
-    );
-
     return h(React.Fragment, null,
       // Card 1: Status & actions
       renderCard("status", t("nav"), true, [
@@ -1106,9 +1026,6 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
               ),
             )
           : null,
-        openDashboard ? h("div", { className: "mn-actions" },
-          h("button", { type: "button", className: "mn-btn mn-btn-save", onClick: openDashboard }, t("dashboardOpen")),
-        ) : null,
         // Dependency checks: one row per dep, install button on the right
         h("div", { className: "mn-deps" },
           h("div", { className: "mn-deps-title" }, t("depsTitle")),
@@ -1170,6 +1087,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         h("div", { className: "mn-actions" },
           h("button", { type: "button", className: "mn-btn", disabled: !!busy || !diag?.cliReady, onClick: test }, busy === "test" ? t("testing") : t("test")),
           h("button", { type: "button", className: "mn-btn", disabled: !!busy, onClick: refresh }, t("refresh")),
+          openDashboard ? h("button", { type: "button", className: "mn-btn", onClick: openDashboard }, t("dashboardOpen")) : null,
         ),
         msg ? h("div", { className: "mn-msg", role: "status" }, msg) : null,
         // Model picker modal
@@ -1216,10 +1134,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       ) : null,
       // Config cards — one per group
       ...groupOrder.map((g) =>
-        groups[g] ? renderCard(g, t(g), false,
-          [...groups[g].map(renderField), ...(g === "groupAuto" ? [renderMigrateRow(), renderMigrateBackRow(), migrateMsg ? h("div", { className: "mn-msg", role: "status", key: "migrate-msg" }, migrateMsg) : null] : [])],
-          t(g + "_hint"),
-        ) : null,
+        groups[g] ? renderCard(g, t(g), false, groups[g].map(renderField), t(g + "_hint")) : null,
       ),
       // Footer: reset button + hint
       h("li", { className: "mn-footer" },
@@ -1369,6 +1284,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
         ),
       );
     });
+
   }
 
   exports.apply = apply;

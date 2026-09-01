@@ -33,4 +33,6 @@ coverage/
 
 
 .dsh-vision-router
+.dsh-vision-toolkit/
 .storefront-sync/
+.mnemosyne-id

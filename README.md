@@ -24,10 +24,11 @@ This plugin is ported from [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mn
 
 ## Features
 
-- **Five native tools**: `mnemosyne_remember` / `mnemosyne_recall` / `mnemosyne_forget` / `mnemosyne_stats` / `mnemosyne_sleep`
+- **Six native tools**: `mnemosyne_remember` / `mnemosyne_recall` / `mnemosyne_forget` / `mnemosyne_stats` / `mnemosyne_sleep` / `mnemosyne_bind`
+- **Filtered memory management**: In the Memory browser, filter the list, select individual records or all records currently shown, then batch-edit trust, expiry, importance, lifecycle status, or scope. Workspace bindings remain available as batch move targets; no content is overwritten.
 - **Embedded skill**: The `mnemosyne` skill auto-registers with the plugin, guiding agents on when to store/retrieve memories
 - **Settings panel**: A dedicated "Mnemosyne" entry in DSH Settings with CLI status, memory stats, one-click install/test, and a config form
-- **Read-only memory dashboard**: Opens from the Mnemosyne Settings panel through the optional Better Sidebar integration, showing the active bank's overview, memories, triples, consolidation history, search, and detail views without mutation controls
+- **Memory dashboard**: Opens from the Mnemosyne Settings panel through the optional Better Sidebar integration, showing the active bank's overview, memory browser, filtered batch management, triples, consolidation history, search, and detail views. Management actions are explicit and confirmed.
 - **Auto-install CLI**: The panel's Setup button runs `uv tool install mnemosyne-memory` and fills `config.yaml` defaults
 - **Data isolation**: SQLite DB and `config.yaml` live under `~/.dsh/mnemosyne`, never touching `~/.hermes`
 - **Config sync**: The panel reads actual values from the flat `config.yaml`; empty fields show default placeholders; saving triggers `mnemosyne config reload`
@@ -37,7 +38,7 @@ This plugin is ported from [`@mnemosyne-oss/pi-mnemosyne`](https://github.com/mn
   - **Prompt section** — Injects a `# Mnemosyne Memory` header into the system prompt so the model knows memory is available
   - **Auto-sync** — Automatically stores genuine user messages (not assistant output) to Mnemosyne after each turn, so conversation context persists without manual `mnemosyne_remember` calls; injected context messages — `plugin` (e.g. this plugin's own prefetch), `agent-instructions` (workspace instructions), and `skill-catalog` (the available-skills reminder) — are never stored. Hermes-compatible length limits default to 500 user characters and 800 assistant characters; set the corresponding limit to `0` to preserve the full message without truncation
   - **Auto-prefetch** — Recalls relevant memories before each model step and injects them into the conversation, so the model sees prior context without calling `mnemosyne_recall`
-  - **Session isolation** — Partitions memories per DSH session via the engine's `session_id` column: each session only recalls its own rows plus `global`-scope ones. Subagents share their root session's memory. Session ids are derived from the persisted session header (`createdAt`), so memory stays attached to a resumed session across DSH restarts. `global` rows are shared **read-write**: every session can recall, and also delete, them. The panel offers a one-click migration of legacy `default`-session memories to `global` after upgrading to session-scoped defaults; `cross_session` recall is not supported
+  - **Session isolation** — Partitions memories per DSH session via the engine's `session_id` column: each session only recalls its own rows plus `global`-scope ones. Subagents share their root session's memory. Session ids are derived from the persisted session header (`createdAt`), so memory stays attached to a resumed session across DSH restarts. `global` rows are shared **read-write**: every session can recall, and also delete, them. The Memory dashboard's management section offers migration of legacy `default`-session memories to `global`, merging session rows back to `default`, and workspace migration after a dry run; `cross_session` recall is not supported
 
 ## Installation
 
@@ -75,11 +76,11 @@ Configuration comes from two sources: the plugin's own DSH settings (`~/.dsh/set
 | Recall | `polyphonicRecall` | config.yaml `polyphonic_recall` |
 | Working Memory | `wmMaxItems` / `wmTtlHours` | config.yaml `wm_*` |
 | Working Memory | `autoSleep` / `sleepThreshold` / `ignorePatterns` / `syncRoles` | config.yaml `auto_sleep_enabled` / `sleep_threshold` / `ignore_patterns` / `sync_roles` |
-| Automatic Memory | `promptSection` / `autoSync` / `syncTurnUserLimit` / `syncTurnAssistantLimit` / `autoPrefetch` / `sessionScope` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
+| Automatic Memory | `promptSection` / `autoSync` / `syncTurnUserLimit` / `syncTurnAssistantLimit` / `autoPrefetch` / `recallMode` / `autoWriteScope` / `prefetchTopK` / `prefetchMinQueryLen` | DSH settings / `cordis.patch.yml` |
 
 > **Note**: The Automatic Memory fields are DSH-side config (saved via the Settings panel, not written to `config.yaml`). They take effect at runtime via the settings watcher — no DSH restart needed.
 
-> **Session isolation caveat**: With `sessionScope` enabled (the default), existing memories in the legacy `default` session are invisible to session-scoped recall; migrate them after upgrading with the panel's "Migrate default-session memories to global" button. The inverse action, "Move session-scoped memories back to default", deliberately merges `dsh_*` session rows into the shared legacy namespace and loses their per-session attribution. `global` rows are visible **and deletable** by every session, and the upstream `cross_session` recall switch is forcibly disabled for session-scoped recall. The config panel only returns the fields it manages — an allow-list — and secret values are masked (`***`); stored values are never sent back to the browser.
+> **Scope compatibility**: Existing installations keep their legacy `sessionScope` behavior by default; memories in the legacy `default` session are invisible to session-scoped recall until migrated. New workspace sharing is opt-in through `recallMode=workspace` and `autoWriteScope=workspace`; open the Memory dashboard's management section to migrate data explicitly. The inverse action deliberately merges `dsh_*` session rows into the shared legacy namespace and loses their per-session attribution. `global` rows are visible **and deletable** by every session, and the upstream `cross_session` recall switch is forcibly disabled for scoped recall. Workspace mode uses an explicit `.mnemosyne-id` marker and never silently falls back to another namespace. The config panel only returns the fields it manages — an allow-list — and secret values are masked (`***`); stored values are never sent back to the browser.
 
 Saving writes to the corresponding config file and runs `mnemosyne config reload`. "Reset to Defaults" restores all panel-managed keys to Mnemosyne upstream defaults; additional config can be edited directly in `~/.dsh/mnemosyne/config.yaml`. Most settings hot-reload except `vec_type` and other startup-bound options.
 
