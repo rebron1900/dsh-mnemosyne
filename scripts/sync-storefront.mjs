@@ -27,6 +27,31 @@ function ghApi(path) {
   return JSON.parse(run('gh', ['api', path]))
 }
 
+// `npm view --json` printed a bare object through npm 11; npm 12 wraps the
+// result in a one-element array. Accept either shape.
+function pickPackument(value) {
+  const candidates = Array.isArray(value) ? value : [value]
+  return candidates.find((entry) => entry && typeof entry === 'object' && !Array.isArray(entry)) ?? null
+}
+
+// A missing write permission only surfaces as a bare `403` from git, seconds
+// later and after a clone plus two installs. Check the token up front so the
+// failure names the fix instead.
+function assertStorefrontPushAccess() {
+  let fork
+  try {
+    fork = ghApi(`repos/${forkOwner}/${storefrontRepo}`)
+  } catch (error) {
+    throw new Error(`cannot read storefront fork ${forkOwner}/${storefrontRepo}: ${String(error.message).split('\n')[0]}`)
+  }
+  if (fork.permissions?.push !== true) {
+    throw new Error(
+      `STOREFRONT_TOKEN cannot push to ${forkOwner}/${storefrontRepo}; use a classic PAT with the repo scope, ` +
+        'or a fine-grained PAT with Contents: read and write, then refresh the secret',
+    )
+  }
+}
+
 function yamlQuote(value) {
   return `'${String(value).replaceAll("'", "''")}'`
 }
@@ -47,9 +72,9 @@ function checkRequirements() {
 }
 
 function getPublishedVersion() {
-  const metadata = JSON.parse(run('npm', ['view', pluginPackage, '--json']))
-  const version = metadata.version
-  const publishedAt = metadata.time?.[version]
+  const metadata = pickPackument(JSON.parse(run('npm', ['view', pluginPackage, '--json'])))
+  const version = metadata?.version
+  const publishedAt = version ? metadata.time?.[version] : undefined
   if (!version || !publishedAt) throw new Error(`npm metadata has no publish time for ${pluginPackage}`)
   return { version, publishedAt }
 }
@@ -83,6 +108,7 @@ function hasOpenSyncPullRequest() {
 }
 
 function updateStorefront() {
+  assertStorefrontPushAccess()
   const worktree = resolve(root, '.storefront-sync')
   run('git', ['clone', `https://github.com/${storefrontOwner}/${storefrontRepo}.git`, worktree])
   // Contributions land via a fork: the bot token has no push on the upstream
