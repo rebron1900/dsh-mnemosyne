@@ -1391,7 +1391,13 @@ async function readUpstreamDashboardApi(runtime, env, url) {
       status: options.status,
       sort: options.sort,
     }, env);
-    return { items: data.items.map(upstreamMemoryItem), total: data.offset + data.items.length };
+    return {
+      items: data.items.map(upstreamMemoryItem),
+      total: data.offset + data.items.length,
+      hasMore: data.hasMore,
+      offset: data.offset,
+      limit: data.limit,
+    };
   }
 
   if (route === "today") {
@@ -2360,12 +2366,38 @@ export function apply(ctx, config) {
 
   // HTTP routes for the client panel (Client→Host via fetch). Soft-dep on
   // webServer: headless/minimal hosts without a server simply skip these.
-  ctx.inject(["webServer", "sessionQuery"], (hostCtx) => {
+  ctx.inject(["webServer", "sessionQuery", "connection"], (hostCtx) => {
     const web = hostCtx.webServer;
     const disposers = [];
+
+    // Every route below goes through this wrapper so the host's Connection auth
+    // gate runs before a route body reads memory data or performs a side
+    // effect. Routes registered directly with webServer do not inherit that
+    // gate on their own: requestRejection returns 403 for an untrusted
+    // Host/Origin and 401 for a missing or stale browser cookie. The handlers
+    // keep their own origin checks as a second layer.
+    const rejectUnauthenticated = (req) => {
+      const connection = hostCtx.connection;
+      if (!connection || typeof connection.requestRejection !== "function") return undefined;
+      return connection.requestRejection(req) || undefined;
+    };
+    const registerRawRoute = web.register.bind(web);
+    const registerGuardedRoute = (spec) => registerRawRoute({
+      ...spec,
+      handler: (req, res) => {
+        const rejection = rejectUnauthenticated(req);
+        if (rejection) {
+          return sendJson(res, rejection, {
+            error: rejection === 403 ? "untrusted origin" : "authentication required",
+          });
+        }
+        return spec.handler(req, res);
+      },
+    });
+
     const registerDashboardReadRoute = (path, mode) => {
       disposers.push(
-        web.register({
+        registerGuardedRoute({
           kind: "exact",
           path,
           handler: async (req, res) => {
@@ -2390,7 +2422,7 @@ export function apply(ctx, config) {
     registerDashboardReadRoute("/mnemosyne/dashboard/consolidations", "consolidations");
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/dashboard/api/admin/memory/batch",
         handler: async (req, res) => {
@@ -2412,7 +2444,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "prefix",
         path: "/mnemosyne/dashboard/api",
         handler: async (req, res) => {
@@ -2433,7 +2465,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/dashboard",
         handler: async (req, res) => {
@@ -2445,7 +2477,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/dashboard/",
         handler: async (req, res) => {
@@ -2457,7 +2489,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "prefix",
         path: "/mnemosyne/dashboard/static",
         handler: async (req, res) => {
@@ -2469,7 +2501,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/diagnose",
         handler: async (req, res) => {
@@ -2485,7 +2517,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/setup",
         handler: async (req, res) => {
@@ -2501,7 +2533,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/install-embedding",
         handler: async (req, res) => {
@@ -2517,7 +2549,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/reindex",
         handler: async (req, res) => {
@@ -2544,7 +2576,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/reindex-status",
         handler: async (req, res) => {
@@ -2560,7 +2592,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/test",
         handler: async (req, res) => {
@@ -2586,7 +2618,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/migrate-default-session",
         handler: async (req, res) => {
@@ -2613,7 +2645,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/migrate-session-scopes-to-default",
         handler: async (req, res) => {
@@ -2637,7 +2669,7 @@ export function apply(ctx, config) {
     );
 
     disposers.push(
-      web.register({
+      registerGuardedRoute({
         kind: "exact",
         path: "/mnemosyne/config",
         handler: async (req, res) => {
@@ -2705,7 +2737,7 @@ export function apply(ctx, config) {
     );
 
     const registerWorkspaceRoute = (path) => {
-      disposers.push(web.register({
+      disposers.push(registerGuardedRoute({
         kind: "exact",
         path,
         handler: async (req, res) => {
@@ -2722,7 +2754,7 @@ export function apply(ctx, config) {
     registerWorkspaceRoute("/mnemosyne/workspaces");
     registerWorkspaceRoute("/api/workspaces");
 
-    disposers.push(web.register({
+    disposers.push(registerGuardedRoute({
       kind: "exact",
       path: "/mnemosyne/workspaces/bind",
       handler: async (req, res) => {
@@ -2740,7 +2772,7 @@ export function apply(ctx, config) {
       },
     }));
 
-    disposers.push(web.register({
+    disposers.push(registerGuardedRoute({
       kind: "exact",
       path: "/mnemosyne/workspaces/rebind",
       handler: async (req, res) => {
@@ -2783,7 +2815,7 @@ export function apply(ctx, config) {
       },
     }));
 
-    disposers.push(web.register({
+    disposers.push(registerGuardedRoute({
       kind: "exact",
       path: "/mnemosyne/workspaces/adopt",
       handler: async (req, res) => {
@@ -2816,7 +2848,7 @@ export function apply(ctx, config) {
       },
     }));
 
-    disposers.push(web.register({
+    disposers.push(registerGuardedRoute({
       kind: "exact",
       path: "/mnemosyne/workspaces/migrate",
       handler: async (req, res) => {

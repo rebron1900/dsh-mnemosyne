@@ -146,13 +146,17 @@ describe("client module", () => {
     assert.doesNotMatch(clientSrc, /renderMigrateRow|renderWorkspaceCard|migrate-default-session/);
     const dashboardHtml = readFileSync(new URL("../assets/dashboard/index.html", import.meta.url), "utf8");
     const dashboardJs = readFileSync(new URL("../assets/dashboard/static/app.js", import.meta.url), "utf8");
-    for (const id of ["memoryQuery", "memoryKind", "memorySource", "memoryScope", "memorySession", "memoryVeracity", "memoryStatus", "memorySearch", "memoryList", "bulkSelectAll", "bulkScope", "bulkWorkspaceTarget", "bulkMove", "bulkExpire", "bulkVeracity", "bulkExpiry", "bulkImportance", "bulkClear", "bulkActionStatus"]) {
+    for (const id of ["memoryQuery", "memoryKind", "memorySource", "memoryScope", "memorySession", "memoryVeracity", "memoryStatus", "memorySearch", "memoryList", "memoryListSentinel", "memoryListStatus", "bulkSelectAll", "bulkScope", "bulkWorkspaceTarget", "bulkMove", "bulkExpire", "bulkVeracity", "bulkExpiry", "bulkImportance", "bulkClear", "bulkActionStatus"]) {
       assert.match(dashboardHtml, new RegExp(`id=["']${id}["']`));
     }
     assert.doesNotMatch(dashboardHtml, /memoryManagement|workspaceMigration|migrateDefaultGlobal/);
     assert.match(dashboardHtml, /class="toolbar glass"[\s\S]*id="bulkMemoryBar"/);
     assert.match(dashboardHtml, /data-i18n="Select all in current list"/);
-    assert.match(dashboardJs, /selectedMutableIds\(\)/);
+    assert.match(dashboardJs, /const MEMORY_PAGE_SIZE = 100/);
+     assert.match(dashboardJs, /function initMemoryInfiniteScroll\(\)/);
+     assert.match(dashboardJs, /loadMemories\(true\)/);
+     assert.match(dashboardJs, /memoryHasMore = data\.hasMore === true/);
+     assert.match(dashboardJs, /selectedMutableIds\(\)/);
     assert.match(dashboardJs, /admin\/memory\/batch/);
     assert.match(dashboardJs, /bulkSelection\.clear\(\)/);
     assert.match(dashboardJs, /bulkSelectedStatus/);

@@ -597,7 +597,7 @@ describe("panel HTTP routes", () => {
   }
 
   /** Like createRouteCtx but captures every route into a path → handler map. */
-  function createRouteCtxAll(config) {
+  function createRouteCtxAll(config, connection) {
     const handlers = {};
     const ctx = {
       get: (key) => {
@@ -613,6 +613,7 @@ describe("panel HTTP routes", () => {
         } else if (deps[0] === "webServer") {
           fn({
             webServer: { register: (def) => { handlers[def.path] = def.handler; return () => {}; } },
+            connection,
             effect: (fn) => fn(),
           });
         } else if (deps[0] === "settings") {
@@ -735,6 +736,54 @@ describe("panel HTTP routes", () => {
     assert.equal(write.status, 405);
     const crossSite = await callRoute(handlers["/mnemosyne/dashboard/summary"], jsonReq("GET", undefined, { "sec-fetch-site": "cross-site" }));
     assert.equal(crossSite.status, 403);
+  });
+
+  it("declares connection next to webServer so every route meets the host auth gate", () => {
+    let webServerDeps = null;
+    const { ctx } = createMockCtx();
+    const passthrough = ctx.inject;
+    ctx.inject = (deps, fn) => {
+      if (deps[0] === "webServer") { webServerDeps = deps; return; }
+      passthrough(deps, fn);
+    };
+    apply(ctx, undefined);
+    assert.deepEqual(webServerDeps, ["webServer", "sessionQuery", "connection"]);
+  });
+
+  it("rejects panel routes with the status the host Connection reports", async () => {
+    createDashboardDb(dir);
+    const unauthorized = createRouteCtxAll({ dataDir: dir }, { requestRejection: () => 401 });
+    const denied = await callRoute(unauthorized["/mnemosyne/dashboard/summary"], jsonReq("GET"));
+    assert.equal(denied.status, 401);
+    assert.equal(denied.body.error, "authentication required");
+
+    const untrusted = createRouteCtxAll({ dataDir: dir }, { requestRejection: () => 403 });
+    const fenced = await callRoute(untrusted["/mnemosyne/dashboard/summary"], jsonReq("GET"));
+    assert.equal(fenced.status, 403);
+    assert.equal(fenced.body.error, "untrusted origin");
+  });
+
+  it("gates mutation routes before their handler body runs", async () => {
+    const seen = [];
+    const handlers = createRouteCtxAll({ dataDir: dir }, {
+      requestRejection: (req) => { seen.push(req.method); return 401; },
+    });
+    const denied = await callRoute(handlers["/mnemosyne/setup"], jsonReq("POST", {}));
+    assert.equal(denied.status, 401);
+    assert.deepEqual(seen, ["POST"]);
+  });
+
+  it("runs the handler once the gate passes and on hosts without a Connection service", async () => {
+    createDashboardDb(dir);
+    const gated = createRouteCtxAll({ dataDir: dir }, { requestRejection: () => undefined });
+    const allowed = await callRoute(gated["/mnemosyne/dashboard/summary"], jsonReq("GET"));
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.body.ok, true);
+
+    const headless = createRouteCtxAll({ dataDir: dir });
+    const ungated = await callRoute(headless["/mnemosyne/dashboard/summary"], jsonReq("GET"));
+    assert.equal(ungated.status, 200);
+    assert.equal(ungated.body.ok, true);
   });
 
   it("serves the upstream dashboard API as read-only same-origin JSON", async () => {

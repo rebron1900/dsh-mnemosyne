@@ -1,6 +1,6 @@
 {
   "name": "dsh-mnemosyne",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Mnemosyne memory for DeepSeek Harness: remember / recall / forget / stats / sleep tools, embedded skill, auto-setup, optional auto-sync/prefetch, a Settings panel, and a managed memory dashboard. Data lives under ~/.dsh/mnemosyne.",
   "keywords": [
     "deepseek-harness",
@@ -37,9 +37,13 @@
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-settings": ">=0.1.0-rc.6",
-    "dsh-better-sidebar": "^0.16.1"
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-settings": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-locale": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.5-rc.2",
+    "dsh-better-sidebar": "^0.19.1"
   },
   "peerDependenciesMeta": {
     "dsh-better-sidebar": {
@@ -47,7 +51,7 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6"
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2"
   },
   "dsh": {
     "bundle": {
@@ -55,7 +59,7 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-locale"
       ],

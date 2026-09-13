@@ -377,9 +377,9 @@ button:disabled{opacity:.45;cursor:not-allowed;transform:none!important}
   .settings-card{padding:18px;border-radius:20px}
 }
 
-/* Live memory infinite scroll */
-.live-memory-sentinel{height:1px;width:100%}
-.live-memory-status{text-align:center;margin:18px 0 6px;color:var(--muted)}
+/* Memory lists load in bounded pages and continue as the user reaches the end. */
+.live-memory-sentinel,.memory-list-sentinel{height:1px;width:100%}
+.live-memory-status,.memory-list-status{text-align:center;margin:18px 0 6px;color:var(--muted)}
 
 /* Mnemosyne 2.6 live stream affordances */
 .memory-card.live-new{animation:liveGlow 5s ease-out;border-color:rgba(77,163,255,.55);box-shadow:0 0 0 1px rgba(77,163,255,.18),0 14px 34px rgba(77,163,255,.08)}

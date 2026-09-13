@@ -23,6 +23,7 @@ dsh-mnemosyne/
 ## 环境与依赖
 
 - 包管理器：pnpm
+- DSH 宿主 cohort：`0.1.5-rc.2`（peerDependencies / devDependencies / lockfile 必须同属一个 cohort，升级时整组重写，不混用）
 - 环境变量：无（CLI 路径等走 Config）；依赖 PATH 上的 `mnemosyne` 可执行文件
 - 安装命令：`pnpm install`
 - 安装到 DSH：`dsh plugin --profile web add <npm 包名或本地路径>` 后重启 profile
@@ -31,6 +32,7 @@ dsh-mnemosyne/
 
 - ESM（`"type": "module"`），命名导出：`name` / `inject` / `Config` / `apply` / `SKILL`
 - 服务访问遵循宿主约定：硬依赖写进 `inject` 导出，软依赖用 `ctx.get()` 判空；一切注册放在 `ctx.effect()` / `sctx.effect()` 内，保证 fiber 销毁时自动清理
+- 面板/仪表盘路由：`webServer.register` 注册的裸路由不继承宿主鉴权，所有路由必须经 `registerGuardedRoute` 包装，先调用 `connection.requestRejection(req)` 并原样返回 401/403，再执行原有 origin 检查与业务逻辑
 - 不提交生成目录、依赖目录、密钥或本地环境文件。
 
 ## 命名约定
@@ -64,7 +66,7 @@ dsh-mnemosyne/
 # 安装依赖
 pnpm install
 
-# 测试（当前 node --test 共 153 例；数量随测试扩展更新）
+# 测试（当前 node --test 共 157 例；数量随测试扩展更新）
 pnpm test
 
 # 安装进 web profile（面板 Setup 按钮自动装 CLI，或手动 uv tool install mnemosyne-memory）

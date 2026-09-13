@@ -24,6 +24,14 @@ const REVIEW_PAGE_SIZE = 100;
 let latestMemoryItems = [];
 let memorySearchSequence = 0;
 let memorySearchController = null;
+const MEMORY_PAGE_SIZE = 100;
+let memoryOffset = 0;
+let memoryHasMore = true;
+let memoryLoading = false;
+let memoryInfiniteObserver = null;
+let memoryScrollFallbackBound = false;
+let memoryListError = '';
+let memoryLoadMoreError = '';
 let workspaceState = { bound: [] };
 let latestReviewItems = [];
 let graphView = { scale:1, x:0, y:0, dragging:false, sx:0, sy:0, ox:0, oy:0 };
@@ -681,12 +689,9 @@ async function loadWorkspaces(){
   try { const data=await api('/mnemosyne/workspaces'); workspaceState=data.workspaces || {bound:[]}; renderWorkspaceOptions(); }
   catch(e) { bulkStatus(`Workspace targets unavailable: ${e.message}`, true); }
 }
-async function loadMemories(){
-  const sequence = ++memorySearchSequence;
-  memorySearchController?.abort();
-  memorySearchController = new AbortController();
+function memoryListParams(offset){
   const trustPreset = $('#memoryTrustPreset').value;
-  const params = new URLSearchParams({
+  return new URLSearchParams({
     kind: $('#memoryKind').value,
     q: $('#memoryQuery').value.trim(),
     source: $('#memorySource').value,
@@ -699,27 +704,84 @@ async function loadMemories(){
     due_for_degradation: trustPreset === 'due' ? '1' : '',
     status: $('#memoryStatus').value,
     sort: $('#memorySort').value,
-    limit: '150'
+    limit: String(MEMORY_PAGE_SIZE),
+    offset: String(offset),
   });
+}
+function renderMemoryList(){
   const list = $('#memoryList');
-  if(list) list.innerHTML = stateHtml('loading', 'Loading memories…', 'Applying the selected filters.');
+  if(!list) return;
+  list.innerHTML = memoryListError
+    ? stateHtml('error', 'Memory search failed.', memoryListError)
+    : latestMemoryItems.map(item => memoryItem(item, {selectable:true})).join('') || stateHtml('empty', 'No memories found.', 'Try clearing filters or broadening the memory content search.');
+  bindMemoryClicks(list);
+  bindBulkMemoryControls();
+  updateBulkBar();
+  const status = $('#memoryListStatus');
+  if(status) status.textContent = memoryLoading ? 'Loading more memories…' : memoryLoadMoreError || (memoryHasMore ? 'Scroll to load more memories.' : 'All matching memories loaded.');
+}
+async function loadMemories(append=false){
+  if(append && (memoryLoading || !memoryHasMore)) return;
+  const sequence = append ? memorySearchSequence : ++memorySearchSequence;
+  if(!append){
+    memorySearchController?.abort();
+    memorySearchController = new AbortController();
+    memoryOffset = 0;
+    memoryHasMore = true;
+    memoryListError = '';
+    latestMemoryItems = [];
+    const list = $('#memoryList');
+    if(list) list.innerHTML = stateHtml('loading', 'Loading memories…', 'Applying the selected filters.');
+  }
+  memoryLoading = true;
+  memoryLoadMoreError = '';
+  if(append) {
+    const status = $('#memoryListStatus');
+    if(status) status.textContent = 'Loading more memories…';
+  }
+  const offset = memoryOffset;
   try {
-    const data = await api(`/mnemosyne/dashboard/api/memories?${params.toString()}`, { signal: memorySearchController.signal });
+    const data = await api(`/mnemosyne/dashboard/api/memories?${memoryListParams(offset).toString()}`, { signal: memorySearchController?.signal });
     if(sequence !== memorySearchSequence) return;
-    latestMemoryItems = data.items || [];
+    const items = data.items || [];
+    const seen = new Set(latestMemoryItems.map(item => item.id));
+    latestMemoryItems = append ? [...latestMemoryItems, ...items.filter(item => !seen.has(item.id))] : items;
+    memoryOffset = offset + items.length;
+    memoryHasMore = data.hasMore === true;
     const visibleIds = new Set(latestMemoryItems.map(item => item.id));
     for (const id of bulkSelection) if (!visibleIds.has(id)) bulkSelection.delete(id);
-    list.innerHTML = latestMemoryItems.map(item => memoryItem(item, {selectable:true})).join('') || stateHtml('empty', 'No memories found.', 'Try clearing filters or broadening the memory content search.');
-    bindMemoryClicks(list);
-    bindBulkMemoryControls();
-    updateBulkBar();
   } catch(error) {
     if(error?.name === 'AbortError' || sequence !== memorySearchSequence) return;
-    latestMemoryItems = [];
-    list.innerHTML = stateHtml('error', 'Memory search failed.', error?.message || 'The dashboard could not load filtered memories.');
-    bindBulkMemoryControls();
-    updateBulkBar();
+    if(!append){
+      memoryListError = error?.message || 'The dashboard could not load filtered memories.';
+      latestMemoryItems = [];
+    } else {
+      memoryLoadMoreError = `Unable to load more memories: ${error?.message || 'request failed'}`;
+    }
+  } finally {
+    if(sequence !== memorySearchSequence) return;
+    memoryLoading = false;
+    renderMemoryList();
   }
+}
+function initMemoryInfiniteScroll(){
+  const sentinel = $('#memoryListSentinel');
+  if(!sentinel) return;
+  if(memoryInfiniteObserver) memoryInfiniteObserver.disconnect();
+  const loadMore = () => { if(memoryHasMore && !memoryLoading) loadMemories(true); };
+  if(!('IntersectionObserver' in window)){
+    if(!memoryScrollFallbackBound){
+      window.addEventListener('scroll', () => {
+        if(window.innerHeight + window.scrollY >= document.body.offsetHeight - 700) loadMore();
+      }, {passive:true});
+      memoryScrollFallbackBound = true;
+    }
+    return;
+  }
+  memoryInfiniteObserver = new IntersectionObserver(entries => {
+    if(entries.some(entry => entry.isIntersecting)) loadMore();
+  }, {rootMargin:'700px 0px'});
+  memoryInfiniteObserver.observe(sentinel);
 }
 function selectedMutableIds(){ return latestMemoryItems.filter(x => bulkSelection.has(x.id) && isMutableMemory(x)).map(x => x.id); }
 function bulkStatus(message, error=false){ const el=$('#bulkActionStatus'); if(el){ el.textContent=window.__mnemoL10n?.text?.(message) || message || ''; el.dataset.state=error ? 'error' : 'ok'; } }
@@ -3622,6 +3684,7 @@ $('#themeToggle').onclick = toggleTheme;
 $('#mobileThemeToggle').onclick = toggleTheme;
 $('#mobileRefreshButton').onclick = () => refreshCurrentView().catch(handleInitError);
 initLiveMemoryInfiniteScroll();
+initMemoryInfiniteScroll();
 window.addEventListener('popstate', e => applyRoute(e.state || urlToRoute()));
 initTheme();
 const initialRoute = urlToRoute();
