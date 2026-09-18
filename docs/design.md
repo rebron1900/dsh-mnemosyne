@@ -368,6 +368,7 @@ CLI 无会话参数，因此 `SESSION_HELPER`（`mnemosyne_session_helper.py`，
 ### 12.4 依赖与边界
 
 - 会话路径依赖 CLI shebang 解析出的 python；绝对解释器与 `#!/usr/bin/env python3` 形式都支持。
+- **显式 scope 一律走 helper，只有 legacy `default` 池走裸 CLI**：`mnemosyne store <content> [source] [importance]` 没有 scope 参数，scope 恒为 `MNEMOSYNE_DEFAULT_SCOPE` / `"session"`，因此 `mnemosyne_remember` 的 `scope=global` 与 `scope=workspace` 必须经 helper 直传 `Mnemosyne.remember(scope=...)`，否则会被静默降级成 session 行。global 行落在 `session_id='default'` 且 `scope='global'`，与 §12.4 的 default→global 迁移产物同形。
 - 存量升级默认保留 legacy `sessionScope` 语义；`default` 记忆不会自动迁移。workspace 共享需显式绑定 marker 并切换 `recallMode`/`autoWriteScope`，旧配置不会被静默改写。
 - **global 是所有会话的共享命名空间，可读可写**：任何会话都能 recall 到 global 行，也能 delete 它们（engine 的 forget SQL 是 `session_id = ? OR scope = 'global'`）。这是上游语义，插件不额外做删除保护；需要只读公共记忆时别用 global。
 - **`cross_session` 被会话 helper 强制关闭**：上游 config.yaml 的该键不会扩大 sessionScope 的 recall 范围。

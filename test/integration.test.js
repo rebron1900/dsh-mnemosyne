@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { apply, countConsolidations, migrateDefaultSessionToGlobal, migrateSessionScopesToDefault, recallArgs, resolveCli, resolvePythonInterp, runMnemosyne, storeArgs, writeMnemosyneConfigYaml } from "../src/index.js";
+import { apply, countConsolidations, migrateDefaultSessionToGlobal, migrateSessionScopesToDefault, readDashboardData, recallArgs, resolveCli, resolvePythonInterp, runMnemosyne, storeArgs, writeMnemosyneConfigYaml } from "../src/index.js";
 
 const CLI = resolveCli("mnemosyne");
 const TIMEOUT = 30_000;
@@ -208,6 +208,41 @@ suite("dsh-mnemosyne × real mnemosyne CLI", { concurrency: false }, () => {
     // Forget is session-scoped too: session B cannot delete session A's row.
     await assert.rejects(byName.mnemosyne_forget.execute({ id }, execB), /Memory belongs to another namespace/);
     const deleted = await byName.mnemosyne_forget.execute({ id }, execA);
+    assert.equal(deleted, `Deleted: ${id}`);
+  });
+
+  it("scope=global persists scope='global' and is recallable from every session", async () => {
+    const { ctx, tools } = createMockCtx();
+    apply(ctx, { cli: CLI, dataDir, sessionScope: true });
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    const execA = {
+      agent: { session: { id: "session-aaaa1111-2222-3333-4444-555555555555", header: {} } },
+    };
+    const execB = {
+      agent: { session: { id: "session-bbbb9999-8888-7777-6666-555555555555", header: {} } },
+    };
+
+    const marker = "it-global-007 shared cross-session preference";
+    const stored = await byName.mnemosyne_remember.execute(
+      { content: marker, source: "dsh-it", importance: 0.9, scope: "global" },
+      execA,
+    );
+    const id = stored.split("Stored:")[1].trim();
+    assert.match(id, /^[0-9a-f]{16}$/);
+
+    // The row carries the global scope in the database, not the CLI's
+    // config/env default that `mnemosyne store` would have applied.
+    const detail = await readDashboardData(dataDir, "detail", { id });
+    assert.equal(detail.item.scope, "global");
+
+    // Both the writing session and an unrelated session recall it.
+    const own = await byName.mnemosyne_recall.execute({ query: "cross-session preference", top_k: 5 }, execA);
+    assert.match(own, new RegExp(`ID: ${id}`));
+    const other = await byName.mnemosyne_recall.execute({ query: "cross-session preference", top_k: 5 }, execB);
+    assert.match(other, new RegExp(`ID: ${id}`));
+
+    // A global row is deletable from any namespace.
+    const deleted = await byName.mnemosyne_forget.execute({ id }, execB);
     assert.equal(deleted, `Deleted: ${id}`);
   });
 

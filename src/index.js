@@ -3105,8 +3105,13 @@ export function apply(ctx, config) {
               };
               if (!payload.content) throw new Error("content must not be empty");
               // Scope decides the target namespace; the configured write scope is
-              // irrelevant when the agent names one explicitly.
-              if (requestedScope === "global") return run("store", storeArgs(payload));
+              // irrelevant when the agent names one explicitly. Global goes
+              // through the venv helper because `mnemosyne store` has no scope
+              // argument and always writes the config/env default, which would
+              // silently downgrade a global write to the session scope.
+              if (requestedScope === "global") {
+                return sessRun("store", [payload.content, payload.source ?? "dsh", String(payload.importance ?? 0.5), "global"], "default");
+              }
               if (requestedScope === "workspace") {
                 const target = toolTarget(exec, "read");
                 return sessRun("store", [payload.content, payload.source ?? "dsh", String(payload.importance ?? 0.5), "session"], target.sid);
