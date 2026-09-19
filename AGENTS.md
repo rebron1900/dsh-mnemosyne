@@ -73,6 +73,13 @@ pnpm test
 dsh plugin --profile web add ~/workspace/projects/active/dsh-mnemosyne
 ```
 
+## 发布与目录收录
+
+- 每次发布新的插件版本后，由 Agent 单独执行目录收录：确认 npm 已发布且版本可查询，再向 `rebron1900/awesome-dsh-plugin` fork 推送同步分支，并向 `awesome-dsh-plugin/awesome-dsh-plugin` 创建或更新目录 PR。
+- 目录 PR 只修改 `data/plugins/rebron1900__dsh-mnemosyne.yml` 及上游要求的生成文件；README 不手工编辑。
+- 创建目录 PR 前检查仓库提交、`dsh-plugin` topic、`dsh.bundle` 和发布版本；npm 发布与目录收录是两个独立步骤。
+- 使用本机已登录的 GitHub CLI 凭据，不把 GitHub/NPM token 写入仓库；创建外部 PR 前在当前会话报告目标版本和 PR 地址。
+
 ## 其他规则
 
 - 禁止反向测试和反向注释,不做的事情不用说出来
