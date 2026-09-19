@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -39,22 +38,3 @@ jobs:
         with:
           generate_release_notes: true
 
-  storefront:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Open storefront PR from GitHub source
-        run: node scripts/sync-storefront.mjs
-        env:
-          GH_TOKEN: ${{ github.token }}
-          STOREFRONT_FORK_OWNER: rebron1900

@@ -38,10 +38,7 @@ function assertStorefrontPushAccess() {
     throw new Error(`cannot read storefront fork ${forkOwner}/${storefrontRepo}: ${String(error.message).split('\n')[0]}`)
   }
   if (fork.permissions?.push !== true) {
-    throw new Error(
-      `STOREFRONT_TOKEN cannot push to ${forkOwner}/${storefrontRepo}; use a classic PAT with the repo scope, ` +
-        'or a fine-grained PAT with Contents: read and write, then refresh the secret',
-    )
+    throw new Error(`GitHub credentials cannot push to ${forkOwner}/${storefrontRepo}`)
   }
 }
 
