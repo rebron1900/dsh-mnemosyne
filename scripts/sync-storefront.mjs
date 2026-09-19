@@ -27,13 +27,6 @@ function ghApi(path) {
   return JSON.parse(run('gh', ['api', path]))
 }
 
-// `npm view --json` printed a bare object through npm 11; npm 12 wraps the
-// result in a one-element array. Accept either shape.
-function pickPackument(value) {
-  const candidates = Array.isArray(value) ? value : [value]
-  return candidates.find((entry) => entry && typeof entry === 'object' && !Array.isArray(entry)) ?? null
-}
-
 // A missing write permission only surfaces as a bare `403` from git, seconds
 // later and after a clone plus two installs. Check the token up front so the
 // failure names the fix instead.
@@ -69,14 +62,6 @@ function checkRequirements() {
   if (!packageJson.dsh?.bundle) failures.push('package.json is missing dsh.bundle')
   if (repoInfo.archived) failures.push('repository is archived')
   if (failures.length) throw new Error(`storefront requirements not met:\n- ${failures.join('\n- ')}`)
-}
-
-function getPublishedVersion() {
-  const metadata = pickPackument(JSON.parse(run('npm', ['view', pluginPackage, '--json'])))
-  const version = metadata?.version
-  const publishedAt = version ? metadata.time?.[version] : undefined
-  if (!version || !publishedAt) throw new Error(`npm metadata has no publish time for ${pluginPackage}`)
-  return { version, publishedAt }
 }
 
 function buildEntry() {
@@ -147,18 +132,12 @@ function updateStorefront() {
 }
 
 checkRequirements()
-const published = getPublishedVersion()
-const ageDays = (Date.now() - Date.parse(published.publishedAt)) / 86_400_000
-if (ageDays < 1) {
-  console.log(`skip: ${pluginPackage}@${published.version} was published ${ageDays.toFixed(2)} days ago`)
-  process.exit(0)
-}
 if (hasOpenSyncPullRequest()) {
   console.log(`skip: an open storefront sync PR already exists for ${pluginUrl}`)
   process.exit(0)
 }
 if (dryRun) {
-  console.log(`would sync ${pluginPackage}@${published.version} to ${branch}`)
+  console.log(`would sync ${pluginPackage}@${packageJson.version} from GitHub to ${branch}`)
   process.exit(0)
 }
 updateStorefront()
