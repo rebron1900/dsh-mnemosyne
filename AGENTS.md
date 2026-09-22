@@ -3,9 +3,18 @@
 ## 项目概述
 
 - **描述**：DeepSeek Harness（DSH）的 Mnemosyne 记忆插件 — Profile Bundle 形态，注册 6 个记忆工具与 1 个内嵌技能，提供 Settings 独立面板（CLI 状态/统计/一键安装/测试/配置/恢复默认）和 Memory Dashboard 管理区（工作区绑定、迁移与备份恢复），数据落 `~/.dsh/mnemosyne`，CLI 通过 `uv tool install` 自动安装。自动记忆增强（system prompt 声明段、自动对话存储、自动召回注入、sessionScope 会话隔离）默认对齐 Hermes 集成开启，可在面板逐项关闭。移植自 `mnemosyne-oss/Pi-mnemosyne`。
-- **技术栈**：纯 ESM JavaScript + JSDoc；host 端用 `@deepseek-ai/dsh-tools`/`dsh-settings`/`schemastery`，client 端用 `window.__ModuleLoader__.load` 格式 + `React.createElement`（无构建链）。
+- **技术栈**：纯 ESM JavaScript + JSDoc；host 端用 `@deepseek-ai/dsh-tools`/`schemastery`，client 端用 `window.__ModuleLoader__.load` 格式 + `React.createElement`（无构建链）。
 - **运行时**：Node.js ≥ 20（DSH 宿主进程内运行）
 - **仓库地址**：https://github.com/rebron1900/dsh-mnemosyne
+
+## Settings 接缝（DSH 0.1.7）
+
+DSH 0.1.7 起重写设置接缝：`dsh-settings` 只导出 `SettingsForms`，`ctx.settings.register` 与客户端
+`settingsScope` 均已删除。本插件不再注册 settings namespace：
+Config 各字段声明 `.volatile()`，由 loader 自动投影进 Settings UI；host 端 `apply(ctx, config)`
+里字段是 ref，`cfg()` 统一 `.get()` 读取（plain 值兼容旧宿主与测试）；客户端用
+`ctx.configForms.get("mnemosyne")`（entry id 即 bundle patch 的 id），槽位仍为 `settings.section`。
+`schemastery` 需 ≥ 3.18.3（`.volatile()` 在该版本引入）。
 
 ## 目录结构
 
@@ -23,7 +32,7 @@ dsh-mnemosyne/
 ## 环境与依赖
 
 - 包管理器：pnpm
-- DSH 宿主 cohort：`0.1.5-rc.2`（peerDependencies / devDependencies / lockfile 必须同属一个 cohort，升级时整组重写，不混用）
+- DSH 宿主 cohort：`0.1.7-alpha.1`（peerDependencies / devDependencies / lockfile 必须同属一个 cohort，升级时整组重写，不混用）
 - 环境变量：无（CLI 路径等走 Config）；依赖 PATH 上的 `mnemosyne` 可执行文件
 - 安装命令：`pnpm install`
 - 安装到 DSH：`dsh plugin --profile web add <npm 包名或本地路径>` 后重启 profile

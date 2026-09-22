@@ -48,7 +48,7 @@ describe("client module", () => {
     assert.equal(typeof mod.apply, "function");
     assert.equal(typeof mod.name, "string");
     assert.ok(Array.isArray(mod.inject));
-    assert.deepEqual(mod.inject, ["settingsScope", "slots", "locale"]);
+    assert.deepEqual(mod.inject, ["configForms", "slots", "locale"]);
     assert.doesNotMatch(clientSrc, /dsh-client-runtime/);
   });
 
@@ -60,8 +60,8 @@ describe("client module", () => {
         register: (ns, dict) => { registered.locale.push({ ns, dict }); },
         bind: (ns) => (key) => `[${ns}]${key}`,
       },
-      settingsScope: {
-        bind: (opts) => ({ namespace: opts.namespace, getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
+      configForms: {
+        get: (id) => ({ entryId: id, getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
       },
       slots: {
         inject: (slot, gen) => {
@@ -98,7 +98,7 @@ describe("client module", () => {
       effect: (fn) => fn(),
       get: (key) => key === "betterSidebar" ? sidebar : undefined,
       inject: (deps, callback) => {
-        if (deps[0] === "settingsScope") callback({
+        if (deps[0] === "configForms") callback({
           slots: {
             inject: (slot, gen) => {
               if (slot === "settings.plugin.item") {
@@ -113,8 +113,8 @@ describe("client module", () => {
         register: (ns, dict) => { registered.locale.push({ ns, dict }); },
         bind: (ns) => (key) => `[${ns}]${key}`,
       },
-      settingsScope: {
-        bind: (opts) => ({ namespace: opts.namespace, getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
+      configForms: {
+        get: (id) => ({ entryId: id, getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
       },
       slots: {
         inject: (slot, gen) => { for (const _entry of gen()) { /* settings registration is unrelated here */ } },
@@ -183,7 +183,7 @@ describe("client module", () => {
         register: (ns, dict) => { registered.locale.push({ ns, dict }); },
         bind: (ns) => (key) => `[${ns}]${key}`,
       },
-      settingsScope: { bind: () => ({}) },
+      configForms: { get: () => ({}) },
       slots: { inject: () => {}, register: () => ({}) },
     };
     mod.apply(ctx);
@@ -209,8 +209,8 @@ describe("client module", () => {
     const ctx = {
       effect: (fn) => fn(),
       locale: { register: () => {}, bind: (ns) => (k) => k, subscribe: () => () => {}, getSnapshot: () => ({ active: "en" }) },
-      settingsScope: {
-        bind: () => ({ getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
+      configForms: {
+        get: () => ({ getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
       },
       slots: {
         inject: (_s, gen) => {
@@ -222,7 +222,7 @@ describe("client module", () => {
       },
     };
     mod.apply(ctx);
-    const el = slot.render({ t: (k) => k, scope: ctx.settingsScope.bind(), locale: ctx.locale });
+    const el = slot.render({ t: (k) => k, scope: ctx.configForms.get("mnemosyne"), locale: ctx.locale });
     // render returns h("ul", ..., h(MnemosynePanel, props))
     assert.equal(el.type, "ul");
     assert.ok(el.children.length > 0);

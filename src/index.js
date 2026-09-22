@@ -192,35 +192,35 @@ export function truncateSyncTurnContent(content, limit, fallback) {
 
 export const Config = z.object({
   // --- plugin behaviour (DSH-side; everything below stays in DSH settings) ---
-  cli: z.string().default("mnemosyne").description("Mnemosyne CLI executable (name on PATH or absolute path)."),
-  defaultTopK: z.number().default(5).description("Recall cap when the model omits top_k."),
-  timeoutMs: z.number().default(20_000).description("Per-call CLI timeout in milliseconds."),
-  dataDir: z.string().default(DEFAULT_DATA_DIR).description("Where mnemosyne stores its SQLite DB and config.yaml."),
+  cli: z.string().default("mnemosyne").description("Mnemosyne CLI executable (name on PATH or absolute path).").volatile(),
+  defaultTopK: z.number().default(5).description("Recall cap when the model omits top_k.").volatile(),
+  timeoutMs: z.number().default(20_000).description("Per-call CLI timeout in milliseconds.").volatile(),
+  dataDir: z.string().default(DEFAULT_DATA_DIR).description("Where mnemosyne stores its SQLite DB and config.yaml.").volatile(),
 
   // --- automatic memory (canonical Hermes defaults) ---
   // Hermes activates the provider's prompt, sync, and prefetch surfaces when
   // the provider is selected. Keep the settings explicitly disable-able, but
   // make an omitted value behave like the upstream provider.
-  promptSection: z.boolean().default(true).description("Inject a '# Mnemosyne Memory' section into the system prompt telling the model that memory tools are available."),
+  promptSection: z.boolean().default(true).description("Inject a '# Mnemosyne Memory' section into the system prompt telling the model that memory tools are available.").volatile(),
   // Real user messages are collected after each turn. Assistant output remains
   // controlled by config.yaml sync_roles, whose upstream-compatible default is
   // user-only.
-  autoSync: z.boolean().default(true).description("Automatically store real user messages after each turn; add assistant to config.yaml sync_roles to include final assistant output."),
-  syncTurnUserLimit: z.number().default(SYNC_TURN_USER_LIMIT_DEFAULT).description("Maximum user characters stored by auto-sync; 0 disables truncation."),
-  syncTurnAssistantLimit: z.number().default(SYNC_TURN_ASSISTANT_LIMIT_DEFAULT).description("Maximum assistant characters stored by auto-sync; 0 disables truncation."),
-  autoPrefetch: z.boolean().default(true).description("Automatically recall and inject relevant memories before each model step."),
-  prefetchTopK: z.number().default(5).description("Number of memories to recall for auto-prefetch injection."),
+  autoSync: z.boolean().default(true).description("Automatically store real user messages after each turn; add assistant to config.yaml sync_roles to include final assistant output.").volatile(),
+  syncTurnUserLimit: z.number().default(SYNC_TURN_USER_LIMIT_DEFAULT).description("Maximum user characters stored by auto-sync; 0 disables truncation.").volatile(),
+  syncTurnAssistantLimit: z.number().default(SYNC_TURN_ASSISTANT_LIMIT_DEFAULT).description("Maximum assistant characters stored by auto-sync; 0 disables truncation.").volatile(),
+  autoPrefetch: z.boolean().default(true).description("Automatically recall and inject relevant memories before each model step.").volatile(),
+  prefetchTopK: z.number().default(5).description("Number of memories to recall for auto-prefetch injection.").volatile(),
   // Hermes itself gates trivial prompts. Keep this DSH compatibility knob, but
   // default to one character so the provider is not silently query-disabled.
-  prefetchMinQueryLen: z.number().default(1).description("Minimum user-message length to trigger auto-prefetch (shorter messages are skipped)."),
+  prefetchMinQueryLen: z.number().default(1).description("Minimum user-message length to trigger auto-prefetch (shorter messages are skipped).").volatile(),
   // Hermes providers are session-scoped by default. Global memories remain the
   // explicit cross-session durable surface.
-  sessionScope: z.boolean().default(true).description("Deprecated: partition memories per DSH session (session_id); recall also includes global rows. Prefer recallMode/autoWriteScope."),
+  sessionScope: z.boolean().default(true).description("Deprecated: partition memories per DSH session (session_id); recall also includes global rows. Prefer recallMode/autoWriteScope.").volatile(),
   // Workspace-scope switches (independent READ/WRITE boundaries). New installs
   // default to workspace/workspace; existing installs keep session/session via
   // the sessionScope transform below until the user migrates in the panel.
-  recallMode: z.union(["default", "session", "workspace"]).default("session").description("READ boundary: 'session' recalls only the current session plus global; 'workspace' recalls the bound workspace namespace plus global."),
-  autoWriteScope: z.union(["default", "session", "workspace"]).default("session").description("WRITE level for automatic memory: 'session' writes to the current session namespace; 'workspace' writes to the bound workspace namespace."),
+  recallMode: z.union(["default", "session", "workspace"]).default("session").description("READ boundary: 'session' recalls only the current session plus global; 'workspace' recalls the bound workspace namespace plus global.").volatile(),
+  autoWriteScope: z.union(["default", "session", "workspace"]).default("session").description("WRITE level for automatic memory: 'session' writes to the current session namespace; 'workspace' writes to the bound workspace namespace.").volatile(),
 });
 
 // Embedding / LLM / recall-tuning / working-memory settings (noEmbeddings,
@@ -2063,7 +2063,12 @@ export function shouldRunSessionEndSleep(sessionsWithTurnMemory, session) {
 }
 
 export function apply(ctx, config) {
-  const cfg = () => config ?? {};
+  // DSH 0.1.7 settings seam: `.volatile()` Config fields arrive as refs the
+  // loader updates in place when the settings document changes, so every read
+  // below sees live values without a re-apply. Plain values (older hosts and
+  // unit-test fixtures) pass through unchanged.
+  const readField = (value) => (value && typeof value.get === "function" ? value.get() : value);
+  const cfg = () => Object.fromEntries(Object.entries(config ?? {}).map(([key, value]) => [key, readField(value)]));
   // Dynamic config is the runtime source for both auto-memory and plugin
   // transport settings. The settings panel can therefore change CLI/dataDir
   // without reporting success for a value the executor still ignores.
@@ -2113,7 +2118,6 @@ export function apply(ctx, config) {
   // a fallback layer under it. Re-synced on registration, settings watch,
   // document-updated events, and each pre-step / turn-end.
   const AUTO_KEYS = SETTINGS_AUTO_KEYS;
-  let settingsScope = null;
   let systemPromptService = null;
   let sectionDisposer = null;
   let dynamicCfgCache = null;
@@ -2162,7 +2166,12 @@ export function apply(ctx, config) {
   const syncDynamicCfg = (force = false) => {
     const settingsPath = settingsFilePath();
     const dataDir = expandPath(runtimeCfg().dataDir);
-    let signature = `${settingsPath}|${dataDir}`;
+    const live = cfg();
+    // The auto keys ride the live entry config (the settings document reaches
+    // the plugin through it), so they are part of the cache signature: a panel
+    // write must invalidate without a file stat changing.
+    const liveAuto = Object.fromEntries(AUTO_KEYS.filter((key) => live[key] !== undefined).map((key) => [key, live[key]]));
+    let signature = `${settingsPath}|${dataDir}|auto:${JSON.stringify(liveAuto)}`;
     for (const path of [settingsPath, join(dataDir, "config.yaml")]) {
       try {
         const stat = statSync(path);
@@ -2173,13 +2182,14 @@ export function apply(ctx, config) {
       dynamicCfg = dynamicCfgCache;
       return;
     }
-    const resolved = settingsScope && typeof settingsScope.get === "function" ? settingsScope.get() : undefined;
     const fileCfg = readSettingsFileAutoCfg();
     const yamlCfg = readCachedMnemosyneConfig();
     const yamlScopes = {};
     if (yamlCfg.recallMode !== undefined) yamlScopes.recallMode = yamlCfg.recallMode;
     if (yamlCfg.autoWriteScope !== undefined) yamlScopes.autoWriteScope = yamlCfg.autoWriteScope;
-    dynamicCfg = { ...AUTO_MEMORY_DEFAULTS, ...cfg(), ...yamlScopes, ...(resolved || {}), ...fileCfg };
+    // Layer order preserved from the settings-service era: defaults < loader
+    // config < config.yaml scopes < settings document (auto keys) < settings.yaml.
+    dynamicCfg = { ...AUTO_MEMORY_DEFAULTS, ...live, ...yamlScopes, ...liveAuto, ...fileCfg };
     dynamicCfgCache = dynamicCfg;
     dynamicCfgSignature = signature;
     targetCacheEpoch += 1;
@@ -2308,33 +2318,10 @@ export function apply(ctx, config) {
       });
     });
 
-  // Register the "mnemosyne" settings namespace so the client panel's
-  // settingsScope can read/write config. Hard-dep via ctx.inject (not soft
-  // ctx.get) — same pattern as dsh-vision-router, ensures registration fires
-  // once the settings service is available.
-  ctx.inject(["settings"], (sctx) => {
-    sctx.effect(
-      () => {
-        const scope = sctx.settings.register("mnemosyne", Config, { base: cfg() });
-        settingsScope = scope;
-        syncDynamicCfg();
-        // Watch for panel changes and update dynamicCfg in real-time
-        const offWatch = scope && typeof scope.watch === "function"
-          ? scope.watch(() => syncDynamicCfg(true))
-          : undefined;
-        // The service also emits document-updated on every raw-section change —
-        // a second net for the async first publish / fiber reloads.
-        const offDoc = ctx.on("settings/document-updated", (ns) => {
-          if (ns === "mnemosyne") syncDynamicCfg(true);
-        });
-        return () => {
-          offWatch?.();
-          offDoc?.();
-        };
-      },
-      "mnemosyne: settings namespace"
-    );
-  });
+  // DSH 0.1.7 settings seam: no namespace registration of our own. The loader
+  // projects this entry's Config schema into the Settings UI, and `.volatile()`
+  // fields reach `cfg()` as live refs, so a panel write lands on the next
+  // syncDynamicCfg() (its cache signature includes the auto keys).
 
   // --- system prompt section (opt-in) ---
   // When promptSection is enabled, inject a "# Mnemosyne Memory" section

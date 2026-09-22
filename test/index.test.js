@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   apply,
   AUTO_MEMORY_DEFAULTS,
+  Config,
   SYNC_TURN_USER_LIMIT_DEFAULT,
   SYNC_TURN_ASSISTANT_LIMIT_DEFAULT,
   truncateSyncTurnContent,
@@ -100,11 +101,6 @@ function createMockCtx() {
           webServer: { register: () => () => {} },
           effect: (fn) => { effects.push(fn()); return () => {}; },
         });
-      } else if (deps[0] === "settings") {
-        fn({
-          settings: { register: () => ({ get: () => ({}), watch: () => () => {} }) },
-          effect: (fn) => { effects.push(fn()); return () => {}; },
-        });
       } else if (deps[0] === "systemPrompt") {
         fn({
           systemPrompt: {
@@ -187,6 +183,34 @@ describe("session scoping helpers", () => {
     for (const verb of ["store", "recall", "recall-json", "delete", "sleep"]) {
       assert.ok(SESSION_HELPER.includes(`verb == "${verb}"`), `helper covers verb ${verb}`);
     }
+  });
+});
+
+describe("DSH 0.1.7 settings seam", () => {
+  it("declares every Config field volatile so the loader projects a live form", () => {
+    assert.ok(Object.keys(Config.dict).length > 0);
+    for (const [field, schema] of Object.entries(Config.dict)) {
+      assert.equal(schema.meta?.volatile, true, `${field} must be declared .volatile()`);
+    }
+  });
+
+  it("apply runs on ref-only config and observes live flips without a settings service", async () => {
+    const { ctx, systemPromptSections, sessionEvents } = createMockCtx();
+    const dir = mkdtempSync(join(tmpdir(), "mn-seam-"));
+    let promptSection = true;
+    apply(ctx, {
+      dataDir: { get: () => dir },
+      promptSection: { get: () => promptSection },
+      autoSync: { get: () => false },
+    });
+    assert.equal(systemPromptSections.length, 1);
+    assert.match(systemPromptSections[0].text(), /Mnemosyne Memory/);
+    // A panel write commits the volatile ref in place; the next sync must
+    // observe the new value with no settings namespace and no re-apply.
+    promptSection = false;
+    for (const handler of sessionEvents) await handler(null, { type: "turn/end" });
+    assert.equal(systemPromptSections[0].text(), "");
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

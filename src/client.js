@@ -1,6 +1,6 @@
 // dsh-mnemosyne client module — Settings section with config form + status panel.
 // Follows the dsh-vision-router pattern: DSH design tokens via injected <style>,
-// settingsScope for config read/write, collapsible card layout.
+// configForms for config read/write (DSH 0.1.7 settings seam), collapsible card layout.
 //
 // Format: window.__ModuleLoader__.load — evaluated by the DSH client runtime.
 
@@ -354,7 +354,9 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
   };
 
   const name = "dsh-mnemosyne-client";
-  const inject = ["settingsScope", "slots", "locale"];
+  // DSH 0.1.7 settings seam: the removed `settingsScope` service is replaced by
+  // `configForms`, keyed by the Host loader entry id (bundle patch id "mnemosyne").
+  const inject = ["configForms", "slots", "locale"];
 
   // type: "toggle" | "text" | "number" | "area"
   // yaml: config.yaml key (snake_case) if this field is stored in config.yaml;
@@ -1223,7 +1225,7 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
   function apply(ctx) {
     ctx.effect(() => ctx.locale.register(NS, LOCALE), "dsh-mnemosyne: dictionaries");
     const t = ctx.locale.bind(NS);
-    const scope = ctx.settingsScope.bind({ namespace: "mnemosyne" });
+    const scope = ctx.configForms.get("mnemosyne");
     // Better Sidebar is an optional client-only service. Registration is lazy:
     // ctx.inject waits for the provider (the sidebar's client may initialize
     // after this plugin), while the eager ctx.get path covers hosts where the
