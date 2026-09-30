@@ -1,6 +1,5 @@
-// dsh-mnemosyne client module — Settings section with config form + status panel.
-// Follows the dsh-vision-router pattern: DSH design tokens via injected <style>,
-// configForms for config read/write (DSH 0.1.7 settings seam), collapsible card layout.
+// dsh-mnemosyne client module — plugin bundle config page + status panel.
+// Uses DSH design tokens, configForms for config read/write, and collapsible cards.
 //
 // Format: window.__ModuleLoader__.load — evaluated by the DSH client runtime.
 
@@ -354,8 +353,8 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
   };
 
   const name = "dsh-mnemosyne-client";
-  // DSH 0.1.7 settings seam: the removed `settingsScope` service is replaced by
-  // `configForms`, keyed by the Host loader entry id (bundle patch id "mnemosyne").
+  // DSH 0.2 exposes the row's live config through configForms and renders a
+  // bundle-owned page through the Plugins panel.
   const inject = ["configForms", "slots", "locale"];
 
   // type: "toggle" | "text" | "number" | "area"
@@ -512,13 +511,6 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     '.mn-upstream{height:100%;min-height:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-2)}' +
     '.mn-upstream-frame{flex:1 1 auto;min-height:0;position:relative}' +
     '.mn-upstream-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent}' +
-    // Settings-nav brain icon: DSH's settings shell only projects id/order/label
-    // from a settings.section registration and picks the nav glyph from a closed
-    // list of built-in ids (unknown ids fall back to a gear). We mark our own nav
-    // button via MutationObserver (see registerSettingsNavIcon) and swap the gear
-    // for a brain using a mask, mirroring dsh-better-sidebar's approach.
-    '[data-dsh-mnemosyne-settings-nav] > svg:first-child{display:none}' +
-    '[data-dsh-mnemosyne-settings-nav]::before{content:"";flex:none;width:16px;height:16px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%2724%27%20height%3D%2724%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M12%205a3%203%200%201%200-5.997.125%204%204%200%200%200-2.526%205.77%204%204%200%200%200%20.556%206.588A4%204%200%201%200%2012%2018Z%27%2F%3E%3Cpath%20d%3D%27M12%205a3%203%200%201%201%205.997.125%204%204%200%200%201%202.526%205.77%204%204%200%200%201-.556%206.588A4%204%200%201%201%2012%2018Z%27%2F%3E%3Cpath%20d%3D%27M12%205v13%27%2F%3E%3C%2Fsvg%3E") center/contain no-repeat}' +
     '@media(max-width:640px){.mn-field{flex-direction:column;gap:6px}.mn-field-left{flex:none;padding-top:0}}';
 
   let stylesInstalled = false;
@@ -1187,41 +1179,6 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
     );
   }
 
-  const SETTINGS_NAV_MARKER = "data-dsh-mnemosyne-settings-nav";
-
-  /**
-   * Mark our row in the DSH settings navigation so the injected CSS can swap
-   * the shell's fallback gear for a brain icon. DSH's settings shell only
-   * projects id/order/label from a settings.section registration and picks the
-   * nav glyph from a closed list of built-in ids, so we locate our own button
-   * by its localized label after the dialog mounts (mirrors dsh-better-sidebar).
-   * @param label - locale-aware label resolver used by the section registration.
-   * @returns disposer that disconnects observation and removes owned markers.
-   */
-  function registerSettingsNavIcon(label) {
-    let disposed = false;
-    const sync = () => {
-      if (disposed) return;
-      const currentLabel = label().trim();
-      const buttons = document.querySelectorAll('[role="dialog"] nav button');
-      for (const button of buttons) {
-        if (currentLabel.length > 0 && button.textContent?.trim() === currentLabel) {
-          button.setAttribute(SETTINGS_NAV_MARKER, "");
-        } else {
-          button.removeAttribute(SETTINGS_NAV_MARKER);
-        }
-      }
-    };
-    sync();
-    const observer = new MutationObserver(sync);
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    return () => {
-      disposed = true;
-      observer.disconnect();
-      document.querySelectorAll(`[${SETTINGS_NAV_MARKER}]`).forEach((el) => el.removeAttribute(SETTINGS_NAV_MARKER));
-    };
-  }
-
   function apply(ctx) {
     ctx.effect(() => ctx.locale.register(NS, LOCALE), "dsh-mnemosyne: dictionaries");
     const t = ctx.locale.bind(NS);
@@ -1260,32 +1217,21 @@ window.__ModuleLoader__.load({ id: "dsh-mnemosyne", factory: (require) => {
       ctx.effect(() => registerSidebarDashboard(earlySidebar) || undefined, "dsh-mnemosyne: register memory dashboard tab");
     }
 
-    // Inject styles up front (idempotent) so the settings-nav brain icon rule
-    // is present before the settings dialog opens — otherwise the icon only
-    // appears after the Mnemosyne section is first rendered.
     installStyles();
 
-    // Swap the settings-nav gear for a brain icon (best-effort; no-op in
-    // headless/minimal hosts without a DOM).
-    if (typeof document !== "undefined") {
-      ctx.effect(() => registerSettingsNavIcon(() => t("nav")), "dsh-mnemosyne: settings navigation icon");
-    }
-
-    ctx.slots.inject("settings.section", function* () {
-      yield ctx.slots.register(
+    ctx.effect(() => ctx.configForms.whileServed(["mnemosyne"], () =>
+      ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register(
         {
-          name: "settings.section",
-          id: "mnemosyne",
-          order: 50,
-          label: () => t("nav"),
+          name: "plugins.bundle.config",
+          key: "dsh-mnemosyne",
           locale: NS,
           inject: () => ({ t, scope, locale: ctx.locale, openDashboard }),
         },
-        (props) => h("ul", { style: { listStyle: "none", margin: 0, padding: 0 } },
-          h(MnemosynePanel, props),
-        ),
-      );
-    });
+        (props) => props.view === "summary" ? t("desc") : h("ul", {
+          style: { listStyle: "none", margin: 0, padding: 0 },
+        }, h(MnemosynePanel, { ...props, t, scope, locale: ctx.locale, openDashboard })),
+      ))
+    ), "dsh-mnemosyne: bundle config page");
 
   }
 

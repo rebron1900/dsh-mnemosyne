@@ -1,6 +1,6 @@
 // Unit tests for the dsh-mnemosyne client module.
 // Loads src/client.js by stubbing window.__ModuleLoader__ and a minimal react,
-// then verifies apply() registers a settings.section slot and locale dictionary.
+// then verifies apply() registers a DSH 0.2 bundle-config slot and locale dictionary.
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -52,7 +52,7 @@ describe("client module", () => {
     assert.doesNotMatch(clientSrc, /dsh-client-runtime/);
   });
 
-  it("apply registers a locale dictionary and a settings.section slot", () => {
+  it("apply registers a locale dictionary and a plugins.bundle.config slot", () => {
     const registered = { locale: [], slots: [] };
     const ctx = {
       effect: (fn) => fn(),
@@ -62,12 +62,13 @@ describe("client module", () => {
       },
       configForms: {
         get: (id) => ({ entryId: id, getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
+        whileServed: (_ids, register) => register(),
       },
       slots: {
-        inject: (slot, gen) => {
-          for (const r of gen()) {
-            registered.slots.push({ opts: r.opts, render: r.render });
-          }
+        inject: (slot, register) => {
+          const r = register();
+          registered.slots.push({ slot, opts: r.opts, render: r.render });
+          return () => {};
         },
         register: (opts, render) => ({ opts, render }),
       },
@@ -81,10 +82,10 @@ describe("client module", () => {
 
     assert.equal(registered.slots.length, 1);
     const slot = registered.slots[0];
-    assert.equal(slot.opts.name, "settings.section");
-    assert.equal(slot.opts.id, "mnemosyne");
-    assert.equal(slot.opts.order, 50);
-    assert.equal(slot.opts.locale, "dsh-mnemosyne", "section opts declare the locale namespace");
+    assert.equal(slot.slot, "plugins.bundle.config");
+    assert.equal(slot.opts.name, "plugins.bundle.config");
+    assert.equal(slot.opts.key, "dsh-mnemosyne");
+    assert.equal(slot.opts.locale, "dsh-mnemosyne", "bundle config declares the locale namespace");
     assert.equal(typeof slot.render, "function");
   });
 
@@ -115,9 +116,10 @@ describe("client module", () => {
       },
       configForms: {
         get: (id) => ({ entryId: id, getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
+        whileServed: (_ids, register) => register(),
       },
       slots: {
-        inject: (slot, gen) => { for (const _entry of gen()) { /* settings registration is unrelated here */ } },
+        inject: (_slot, register) => { register(); return () => {}; },
         register: (opts, render) => ({ opts, render }),
       },
     };
@@ -183,7 +185,7 @@ describe("client module", () => {
         register: (ns, dict) => { registered.locale.push({ ns, dict }); },
         bind: (ns) => (key) => `[${ns}]${key}`,
       },
-      configForms: { get: () => ({}) },
+      configForms: { get: () => ({}), whileServed: (_ids, register) => register() },
       slots: { inject: () => {}, register: () => ({}) },
     };
     mod.apply(ctx);
@@ -211,18 +213,20 @@ describe("client module", () => {
       locale: { register: () => {}, bind: (ns) => (k) => k, subscribe: () => () => {}, getSnapshot: () => ({ active: "en" }) },
       configForms: {
         get: () => ({ getSnapshot: () => ({}), subscribe: () => () => {}, set: async () => {} }),
+        whileServed: (_ids, register) => register(),
       },
       slots: {
-        inject: (_s, gen) => {
-          for (const r of gen()) {
-            slot = { opts: r.opts, render: r.render };
-          }
+        inject: (name, register) => {
+          const r = register();
+          slot = { name, opts: r.opts, render: r.render };
+          return () => {};
         },
         register: (opts, render) => ({ opts, render }),
       },
     };
     mod.apply(ctx);
-    const el = slot.render({ t: (k) => k, scope: ctx.configForms.get("mnemosyne"), locale: ctx.locale });
+    assert.equal(slot.name, "plugins.bundle.config");
+    const el = slot.render({ view: "page" });
     // render returns h("ul", ..., h(MnemosynePanel, props))
     assert.equal(el.type, "ul");
     assert.ok(el.children.length > 0);

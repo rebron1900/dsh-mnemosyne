@@ -70,6 +70,7 @@ function createMockCtx() {
   const tools = [];
   const skills = [];
   const effects = [];
+  const settingsPresentations = [];
   const sessionEvents = [];
   const preStepListeners = [];
   const systemPromptSections = [];
@@ -91,7 +92,12 @@ function createMockCtx() {
       return () => {};
     },
     inject: (deps, fn) => {
-      if (deps[0] === "tools") {
+      if (deps[0] === "settings") {
+        fn({
+          settings: { configure: (presentation, owner) => { settingsPresentations.push({ presentation, owner }); return () => {}; } },
+          effect: (fn) => { effects.push(fn()); return () => {}; },
+        });
+      } else if (deps[0] === "tools") {
         fn({
           effect: (fn) => { effects.push(fn()); return () => {}; },
           tools: { register: (def) => (tools.push(def), () => {}) },
@@ -117,7 +123,7 @@ function createMockCtx() {
       }
     },
   };
-  return { ctx, tools, skills, sessionEvents, preStepListeners, systemPromptSections };
+  return { ctx, tools, skills, sessionEvents, preStepListeners, systemPromptSections, settingsPresentations };
 }
 
 describe("argument builders", () => {
@@ -186,7 +192,7 @@ describe("session scoping helpers", () => {
   });
 });
 
-describe("DSH 0.1.7 settings seam", () => {
+describe("DSH 0.2 settings seam", () => {
   it("declares every Config field volatile so the loader projects a live form", () => {
     assert.ok(Object.keys(Config.dict).length > 0);
     for (const [field, schema] of Object.entries(Config.dict)) {
@@ -194,8 +200,8 @@ describe("DSH 0.1.7 settings seam", () => {
     }
   });
 
-  it("apply runs on ref-only config and observes live flips without a settings service", async () => {
-    const { ctx, systemPromptSections, sessionEvents } = createMockCtx();
+  it("apply suppresses the automatic page and observes live ref flips", async () => {
+    const { ctx, systemPromptSections, sessionEvents, settingsPresentations } = createMockCtx();
     const dir = mkdtempSync(join(tmpdir(), "mn-seam-"));
     let promptSection = true;
     apply(ctx, {
@@ -203,10 +209,11 @@ describe("DSH 0.1.7 settings seam", () => {
       promptSection: { get: () => promptSection },
       autoSync: { get: () => false },
     });
+    assert.deepEqual(settingsPresentations.map((entry) => entry.presentation), [{ auto: false }]);
     assert.equal(systemPromptSections.length, 1);
     assert.match(systemPromptSections[0].text(), /Mnemosyne Memory/);
-    // A panel write commits the volatile ref in place; the next sync must
-    // observe the new value with no settings namespace and no re-apply.
+    // A panel write commits the volatile ref in place; the next sync observes
+    // the new value without re-applying the plugin.
     promptSection = false;
     for (const handler of sessionEvents) await handler(null, { type: "turn/end" });
     assert.equal(systemPromptSections[0].text(), "");
@@ -279,6 +286,10 @@ describe("bundle manifest", () => {
     );
     assert.equal(pkg.dsh?.bundle?.patch, "cordis.patch.yml");
     assert.equal(pkg.main, "src/index.js");
+    for (const [name, range] of Object.entries(pkg.peerDependencies)) {
+      if (name.startsWith("@deepseek-ai/dsh-")) assert.match(range, /0\.2\.0-rc\.2/, `${name} must target DSH 0.2.0-rc.2`);
+    }
+    assert.ok(pkg.dsh.client.inject.includes("@deepseek-ai/dsh-client-ui-plugin-manager"));
   });
 
   it("cordis.patch.yml inserts a single mnemosyne row", async () => {
@@ -1244,7 +1255,7 @@ describe("extractLastUserText", () => {
   it("skips mnemosyne prefetch-injected messages", () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "hello world" }], source: { kind: "user" } },
-      { role: "user", content: [{ type: "text", text: "## Mnemosyne Context" }], source: { kind: "plugin", plugin: "mnemosyne" } },
+      { role: "user", content: [{ type: "text", text: "## Mnemosyne Context" }], source: { kind: "plugin:mnemosyne" } },
     ];
     assert.equal(extractLastUserText(messages), "hello world");
   });
@@ -1343,10 +1354,45 @@ describe("Hermes-inspired prefetch filtering", () => {
     const rows = selectPrefetchRows([
       { content: "Project uses pnpm and ESM modules", score: 0.8, importance: 0.8, source: "fact", keyword_score: 0.6 },
       { content: "The project uses pnpm and ESM modules.", score: 0.7, importance: 0.5, source: "conversation", keyword_score: 0.5 },
-      { content: "CJK 项目使用 pnpm", score: 0.7, importance: 0.8, source: "fact", keyword_score: 0.4 },
+      { content: "CJK project uses pnpm", score: 0.7, importance: 0.8, source: "fact", keyword_score: 0.4 },
     ], "project uses pnpm ESM", 5);
     assert.equal(rows.length, 2);
     assert.match(rows[0].content, /pnpm/);
+  });
+
+  it("segments Chinese queries and rejects unrelated keyword-only global rows", () => {
+    const rows = selectPrefetchRows([
+      { content: "[USER] 审阅 fork 以来的所有修改", score: 0.5, importance: 0.5, source: "conversation", keyword_score: 0.4 },
+      { content: "Browser Use 与 Computer Use 的技术说明", score: 0.9, importance: 0.9, source: "dsh", keyword_score: 0.4 },
+    ], "审阅一遍我fork以来所有的修改。", 5);
+    assert.equal(rows.length, 1);
+    assert.match(rows[0].content, /审阅/);
+  });
+
+  it("keeps topical memories when a natural-language question has many extra words", () => {
+    const rows = selectPrefetchRows([
+      { id: "relevant", content: "自动召回使用 prefetch 注入记忆", score: 0.4, source: "fact", keyword_score: 0.4 },
+      { id: "noise", content: "用户要求正确卸载插件", score: 0.9, source: "fact", keyword_score: 0.4 },
+    ], "现在的自动召回是在什么阶段执行的？我怎么发现似乎不能正确执行呢？", 5);
+    assert.deepEqual(rows.map((row) => row.id), ["relevant"]);
+  });
+
+  it("keeps older user memories with strong topical evidence despite an age-decayed score", () => {
+    const rows = selectPrefetchRows([
+      { id: "relevant", content: "[USER] 自动召回需要在模型调用前执行", score: 0.1, source: "conversation", keyword_score: 0.6 },
+      { id: "weak", content: "[USER] 自动召回", score: 0.1, source: "conversation", keyword_score: 0.01 },
+    ], "自动召回", 5);
+    assert.deepEqual(rows.map((row) => row.id), ["relevant"]);
+  });
+
+  it("drops recent self conversation rows for a scoped prefetch", () => {
+    const now = Date.parse("2026-09-19T12:00:00Z");
+    const rows = selectPrefetchRows([
+      { content: "[USER] 审阅 fork 以来的所有修改", score: 0.9, importance: 0.5, source: "conversation", keyword_score: 1, channel_id: "dsh_v2_workspace_test", timestamp: "2026-09-19T11:59:45Z" },
+      { content: "[USER] 审阅 fork 以来的所有修改", score: 0.8, importance: 0.5, source: "conversation", keyword_score: 1, channel_id: "dsh_v2_workspace_other", timestamp: "2026-09-19T11:59:45Z" },
+    ], "审阅一遍我fork以来所有的修改。", 5, { sessionId: "dsh_v2_workspace_test", now, recentConversationMs: 30_000 });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].channel_id, "dsh_v2_workspace_other");
   });
 });
 describe("auto-sync session/event handler", () => {
@@ -1363,7 +1409,7 @@ describe("auto-sync session/event handler", () => {
         id: "test-id",
         role: "user",
         content: [{ type: "text", text: "injected context" }],
-        source: { kind: "plugin", plugin: "mnemosyne" },
+        source: { kind: "plugin:mnemosyne" },
       },
     };
     // The handler will try to run the CLI and fail silently (no mnemosyne on path in test env).
@@ -1484,9 +1530,55 @@ describe("parseSettingsAutoSection", () => {
 });
 
 describe("prefetch message shape", () => {
+  it("injects recall before admission while preserving the downstream decision", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mn-prefetch-"));
+    try {
+      const cli = join(dir, "recall-cli");
+      writeFileSync(cli, `#!${process.execPath}\nif (process.env.MNEMOSYNE_DATA_DIR !== ${JSON.stringify(dir)}) process.exit(1);\nconsole.log(JSON.stringify([{ content: "自动召回在模型调用前执行", score: 0.5, keyword_score: 0.8, source: "fact" }]));\n`, { mode: 0o755 });
+      const { ctx, preStepListeners } = createMockCtx();
+      apply(ctx, { dataDir: dir, cli, autoPrefetch: true, recallMode: "default", autoWriteScope: "default", autoSync: false });
+      const session = {};
+      const decision = {
+        kind: "enter",
+        startsRequestSeries: true,
+        messages: [{ role: "user", source: { kind: "user" }, content: [{ type: "text", text: "自动召回" }] }],
+      };
+      const payload = { agent: { session }, turn: 1, step: 1, signal: new AbortController().signal };
+      const handler = preStepListeners[0].handler;
+      const result = await handler(payload, async () => decision);
+      assert.equal(result.messages.length, 2);
+      assert.equal(result.startsRequestSeries, true);
+      assert.equal(result.messages[0], decision.messages[0]);
+      assert.equal(result.messages[1].source.kind, "plugin:mnemosyne");
+      assert.match(result.messages[1].id, /^[0-9a-f-]{36}$/);
+      assert.match(result.messages[1].content[0].text, /Mnemosyne Context/);
+      assert.equal(decision.messages.length, 1);
+      assert.equal(await handler({ ...payload, step: 2 }, async () => decision), decision);
+      const rejected = { kind: "reject" };
+      assert.equal(await handler({ ...payload, turn: 2 }, async () => rejected), rejected);
+      assert.equal((await handler({ ...payload, turn: 3 }, async () => decision)).messages.length, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("injected messages have an id field (required by DSH session.append)", () => {
     // createUserMessage uses crypto.randomUUID() for id — verified by import
     // The randomUUID import from node:crypto guarantees a valid UUID string
     assert.ok(typeof randomUUID === "function", "randomUUID is available");
+  });
+
+  // DSH session format v4 refuses the retired `kind: 'plugin'` + `plugin`
+  // wrapper ("format v4 message requires a producer-owned source kind"), so a
+  // live injection must carry the plugin's own kind — the same one the core's
+  // v3→v4 migration derives for rows this plugin wrote earlier.
+  it("uses a producer-owned source kind accepted by session format v4", () => {
+    const kinds = [
+      { kind: "plugin:mnemosyne", form: "snapshot", sections: [{ name: "mnemosyne-prefetch", text: "ctx" }] },
+      { kind: "plugin:mnemosyne", form: "snapshot", sections: [{ name: "mnemosyne-bind-hint", text: "hint" }] },
+    ];
+    for (const source of kinds) {
+      assert.equal(source.kind, "plugin:mnemosyne");
+      assert.ok(!("plugin" in source), "retired plugin wrapper must be dropped");
+    }
   });
 });

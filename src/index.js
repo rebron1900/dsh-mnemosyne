@@ -2063,8 +2063,12 @@ export function shouldRunSessionEndSleep(sessionsWithTurnMemory, session) {
 }
 
 export function apply(ctx, config) {
-  // DSH 0.1.7 settings seam: `.volatile()` Config fields arrive as refs the
-  // loader updates in place when the settings document changes, so every read
+  ctx.inject(["settings"], (child) => {
+    if (typeof child.settings?.configure !== "function") return;
+    child.effect(() => child.settings.configure({ auto: false }, ctx.fiber));
+  });
+  // DSH 0.2 settings seam: `.volatile()` Config fields arrive as refs the
+  // loader updates in place when the active profile changes, so every read
   // below sees live values without a re-apply. Plain values (older hosts and
   // unit-test fixtures) pass through unchanged.
   const readField = (value) => (value && typeof value.get === "function" ? value.get() : value);
@@ -2318,8 +2322,8 @@ export function apply(ctx, config) {
       });
     });
 
-  // DSH 0.1.7 settings seam: no namespace registration of our own. The loader
-  // projects this entry's Config schema into the Settings UI, and `.volatile()`
+  // DSH 0.2 settings seam: no namespace registration of our own. The loader
+  // projects this entry's Config schema into configForms, and `.volatile()`
   // fields reach `cfg()` as live refs, so a panel write lands on the next
   // syncDynamicCfg() (its cache signature includes the auto keys).
 
@@ -3289,10 +3293,10 @@ export function apply(ctx, config) {
               if (error?.code === "DELEGATED_CALLER" || error?.code === "CALLER_NOT_LIVE") {
                 const hint = "（本工作区尚未绑定 Mnemosyne 项目记忆。请在根会话中征得用户同意后运行 mnemosyne_bind 完成初始化。）";
                 return {
-                  kind: "enter",
+                  ...decision,
                   messages: [...decision.messages, createUserMessage({
                     content: [{ type: "text", text: hint }],
-                    source: { kind: "plugin", plugin: "mnemosyne", form: "snapshot", sections: [{ name: "mnemosyne-bind-hint", text: hint }] },
+                    source: { kind: "plugin:mnemosyne", form: "snapshot", sections: [{ name: "mnemosyne-bind-hint", text: hint }] },
                   })],
                 };
               }
@@ -3304,10 +3308,10 @@ export function apply(ctx, config) {
               "（本工作区尚未绑定 Mnemosyne 项目记忆。可在征得用户同意后运行 mnemosyne_bind 完成初始化；" +
               "用户不同意则忽略本提示，本次对话记忆功能将保持停用。）";
             return {
-              kind: "enter",
+              ...decision,
               messages: [...decision.messages, createUserMessage({
                 content: [{ type: "text", text: hint }],
-                source: { kind: "plugin", plugin: "mnemosyne", form: "snapshot", sections: [{ name: "mnemosyne-bind-hint", text: hint }] },
+                source: { kind: "plugin:mnemosyne", form: "snapshot", sections: [{ name: "mnemosyne-bind-hint", text: hint }] },
               })],
             };
           }
@@ -3327,20 +3331,24 @@ export function apply(ctx, config) {
           // Hermes-inspired DSH prefetch gate locally. Explicit mnemosyne_recall remains
           // intentionally broader and keeps its CLI output contract.
           const candidateK = Math.min(100, Math.max(topK * 2, 10));
+          const prefetchedAt = Date.now();
           const result = readTarget.mode === "default"
             ? await run("recall", recallArgs({ query, topK: candidateK }, topKLimit()))
             : await sessRun("recall-json", [query, String(candidateK), "0"], readTarget.sid);
-          const rows = selectPrefetchRows(parseRecallRows(result), query, topK);
+          const rows = selectPrefetchRows(parseRecallRows(result), query, topK, {
+            sessionId: readTarget.mode === "scoped" ? readTarget.sid : null,
+            now: prefetchedAt,
+            recentConversationMs: PREFETCH_RECENT_CONVERSATION_MS,
+          });
           const contextText = formatPrefetchRows(rows);
           if (!contextText) return decision;
 
           return {
-            kind: "enter",
+            ...decision,
             messages: [...decision.messages, createUserMessage({
               content: [{ type: "text", text: contextText }],
               source: {
-                kind: "plugin",
-                plugin: "mnemosyne",
+                kind: "plugin:mnemosyne",
                 form: "snapshot",
                 sections: [{ name: "mnemosyne-prefetch", text: contextText }],
               },
@@ -3411,16 +3419,26 @@ export function parseRecallRows(recallOutput) {
   return rows;
 }
 
+const ZH_WORD_SEGMENTER = typeof Intl?.Segmenter === "function"
+  ? new Intl.Segmenter("zh", { granularity: "word" })
+  : null;
+const CJK_RE = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
+const PREFETCH_RECENT_CONVERSATION_MS = 30_000;
+
+/** Tokenize Chinese with the platform ICU dictionary; regex remains the fallback. */
 function recallTokens(value) {
   const text = String(value ?? "").toLocaleLowerCase();
-  const words = text.match(/[\p{L}\p{N}_]+/gu) ?? [];
-  const cjk = text.match(/[\u3400-\u9fff]/gu) ?? [];
-  return new Set([...words, ...cjk]);
+  if (ZH_WORD_SEGMENTER && CJK_RE.test(text)) {
+    return new Set([...ZH_WORD_SEGMENTER.segment(text)]
+      .filter((part) => part.isWordLike)
+      .map((part) => part.segment));
+  }
+  return new Set(text.match(/[\p{L}\p{N}_]+/gu) ?? []);
 }
 
 const RECALL_STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "i", "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "what", "when", "where", "which", "who", "why", "with", "you",
-  "请", "可以", "什么", "如何", "是否", "这个", "那个", "一下", "一下子",
+  "请", "可以", "什么", "如何", "是否", "这个", "那个", "一下", "一下子", "的", "了", "是", "和", "与", "在", "我", "你", "他", "她", "它", "从", "到", "对", "将", "已", "还", "都", "也", "为", "中", "上", "下",
 ]);
 
 function distinctiveRecallTokens(value) {
@@ -3454,9 +3472,12 @@ function semanticSimilarity(left, right) {
 }
 
 /** Apply the Hermes-inspired DSH prefetch gate to structured recall rows. */
-export function selectPrefetchRows(rows, query, limit = 5) {
+export function selectPrefetchRows(rows, query, limit = 5, options = {}) {
   const queryTokens = distinctiveRecallTokens(query);
   const requiredDistinctive = queryTokens.size >= 2 ? 2 : 1;
+  const sessionId = String(options.sessionId ?? "");
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const recentConversationMs = Math.max(0, Number(options.recentConversationMs ?? PREFETCH_RECENT_CONVERSATION_MS));
   const candidates = parseRecallRows(rows).map((row) => {
     const content = String(row.content ?? "").trim();
     const score = Number(row.score) || 0;
@@ -3466,6 +3487,12 @@ export function selectPrefetchRows(rows, query, limit = 5) {
     const source = String(row.source ?? "").trim();
     const rawConversation = /^(?:\[USER\]|\[ASSISTANT\])/i.test(content) || source === "conversation";
     const role = String(row.role ?? "").toLowerCase();
+    const rowSessionId = String(row.session_id ?? row.channel_id ?? "");
+    const timestamp = Date.parse(String(row.timestamp ?? row.created_at ?? ""));
+    const recentSelfConversation = Boolean(
+      sessionId && rawConversation && rowSessionId === sessionId && Number.isFinite(timestamp) &&
+      timestamp <= now + 5_000 && now - timestamp <= recentConversationMs,
+    );
     return {
       ...row,
       content,
@@ -3476,19 +3503,22 @@ export function selectPrefetchRows(rows, query, limit = 5) {
       signal,
       rawConversation,
       role,
+      recentSelfConversation,
       adjustedScore: (score * 0.65 + signal * 0.35 + importance * 0.05) * (rawConversation ? 0.9 : 1),
     };
   }).filter((row) => {
     if (!row.content || row.role === "assistant" || /^\[ASSISTANT\]/i.test(row.content)) return false;
-    if (queryTokens.size === 0) return false;
+    if (row.recentSelfConversation || queryTokens.size === 0) return false;
     const matchingDistinctive = row.signal * queryTokens.size;
-    const hasCoverage = row.signal >= 0.3 && matchingDistinctive >= requiredDistinctive;
-    // A raw conversation row cannot enter solely because it has high
-    // importance. It needs lexical/topic evidence and a usable hybrid score.
-    if (row.rawConversation && (!hasCoverage && row.keywordScore <= 0.05 || row.score < 0.15)) return false;
-    // Distilled memories still need topical evidence; importance alone must
-    // never cause silent prompt injection.
-    return hasCoverage || row.keywordScore > 0.05;
+    // ponytail: require exact topic matches; upstream keyword evidence can
+    // rescue verbose queries. Semantic-only admission needs calibrated scores.
+    const hasCoverage = matchingDistinctive >= requiredDistinctive && (row.signal >= 0.3 || row.keywordScore >= 0.3);
+    // Hybrid scores decay with age; strong keyword evidence remains useful.
+    if (row.rawConversation && ((!hasCoverage && row.keywordScore <= 0.05) || (row.score < 0.15 && row.keywordScore < 0.3))) return false;
+    // Keyword-only fallback is safe only for a genuinely single-token query;
+    // multi-token queries must show topic coverage so global rows do not crowd
+    // out workspace memories on weak lexical coincidences.
+    return hasCoverage || (queryTokens.size <= 1 && row.keywordScore > 0.05);
   }).sort((a, b) => b.adjustedScore - a.adjustedScore);
 
   const selected = [];

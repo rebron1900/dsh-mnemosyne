@@ -2,19 +2,16 @@
 
 ## 项目概述
 
-- **描述**：DeepSeek Harness（DSH）的 Mnemosyne 记忆插件 — Profile Bundle 形态，注册 6 个记忆工具与 1 个内嵌技能，提供 Settings 独立面板（CLI 状态/统计/一键安装/测试/配置/恢复默认）和 Memory Dashboard 管理区（工作区绑定、迁移与备份恢复），数据落 `~/.dsh/mnemosyne`，CLI 通过 `uv tool install` 自动安装。自动记忆增强（system prompt 声明段、自动对话存储、自动召回注入、sessionScope 会话隔离）默认对齐 Hermes 集成开启，可在面板逐项关闭。移植自 `mnemosyne-oss/Pi-mnemosyne`。
+- **描述**：DeepSeek Harness（DSH）的 Mnemosyne 记忆插件 — Profile Bundle 形态，注册 6 个记忆工具与 1 个内嵌技能，提供 Plugins 详情配置页（CLI 状态/统计/一键安装/测试/配置/恢复默认）和 Memory Dashboard 管理区（工作区绑定、迁移与备份恢复），数据落 `~/.dsh/mnemosyne`，CLI 通过 `uv tool install` 自动安装。自动记忆增强（system prompt 声明段、自动对话存储、自动召回注入、sessionScope 会话隔离）默认对齐 Hermes 集成开启，可在面板逐项关闭。移植自 `mnemosyne-oss/Pi-mnemosyne`。
 - **技术栈**：纯 ESM JavaScript + JSDoc；host 端用 `@deepseek-ai/dsh-tools`/`schemastery`，client 端用 `window.__ModuleLoader__.load` 格式 + `React.createElement`（无构建链）。
 - **运行时**：Node.js ≥ 20（DSH 宿主进程内运行）
 - **仓库地址**：https://github.com/rebron1900/dsh-mnemosyne
 
-## Settings 接缝（DSH 0.1.7）
+## 设置接缝（DSH 0.2）
 
-DSH 0.1.7 起重写设置接缝：`dsh-settings` 只导出 `SettingsForms`，`ctx.settings.register` 与客户端
-`settingsScope` 均已删除。本插件不再注册 settings namespace：
-Config 各字段声明 `.volatile()`，由 loader 自动投影进 Settings UI；host 端 `apply(ctx, config)`
-里字段是 ref，`cfg()` 统一 `.get()` 读取（plain 值兼容旧宿主与测试）；客户端用
-`ctx.configForms.get("mnemosyne")`（entry id 即 bundle patch 的 id），槽位仍为 `settings.section`。
-`schemastery` 需 ≥ 3.18.3（`.volatile()` 在该版本引入）。
+Config 字段声明 `.volatile()`，loader 将 entry id `mnemosyne` 投影到 `configForms`；host 用 `cfg()`
+兼容 ref 与测试 plain 值。客户端通过 `ctx.configForms.get("mnemosyne")` 读写，并在
+`plugins.bundle.config` 以 bundle key `dsh-mnemosyne` 注册配置页；用 `whileServed` 跟随 Host namespace 生命周期。
 
 ## 目录结构
 
@@ -23,7 +20,7 @@ dsh-mnemosyne/
 ├── cordis.patch.yml   # bundle patch 层：把 mnemosyne 插件行插入 profile 组合树
 ├── src/index.js       # cordis host 插件：Config/buildEnv/apply → 6 工具 + skill + settings + webServer HTTP 路由
 ├── src/identity.js    # 工作区 marker、identity.json 与 namespace 解析
-├── src/client.js      # cordis client 插件：Settings 左侧 Mnemosyne 入口与 Memory Dashboard
+├── src/client.js      # cordis client 插件：Plugins 详情配置页与 Memory Dashboard
 ├── test/              # node:test：index/identity（单元）+ integration（真实 CLI）+ client（客户端模块）
 ├── docs/design.md     # 实现方案（Pi-mnemosyne 分析、DSH 扩展体系、CLI 契约、面板、配置同步、自动安装与 .dsh 落盘）
 └── package.json       # dsh.bundle 声明是 bundle 身份的关键
@@ -32,7 +29,7 @@ dsh-mnemosyne/
 ## 环境与依赖
 
 - 包管理器：pnpm
-- DSH 宿主 cohort：`0.1.7-alpha.1`（peerDependencies / devDependencies / lockfile 必须同属一个 cohort，升级时整组重写，不混用）
+- DSH 宿主 cohort：`0.2.0-rc.2`（peerDependencies / devDependencies / lockfile 必须同属一个 cohort，升级时整组重写，不混用）
 - 环境变量：无（CLI 路径等走 Config）；依赖 PATH 上的 `mnemosyne` 可执行文件
 - 安装命令：`pnpm install`
 - 安装到 DSH：`dsh plugin --profile web add <npm 包名或本地路径>` 后重启 profile
@@ -60,7 +57,7 @@ dsh-mnemosyne/
 - 执行命令：`pnpm test`
 - 单元层 `test/index.test.js` 与 `test/identity.test.js`：工具注册、配置归一、namespace/marker/identity.json、面板 HTTP 路由、批量管理与工作区绑定安全边界、自动记忆和迁移契约
 - 集成层 `test/integration.test.js`：需真实 `mnemosyne` CLI，否则自动 skip；使用临时 dataDir 验证 remember/recall/forget/stats/sleep 全链路、session/workspace scope、迁移、过滤器桥接、auto-sync 与周期 auto-sleep
-- 客户端层 `test/client.test.js`：stub `window.__ModuleLoader__` + mock React，验证 client 模块导出、locale/settings slot、Memory Dashboard 注册和渲染
+- 客户端层 `test/client.test.js`：stub `window.__ModuleLoader__` + mock React，验证 client 模块导出、locale/Plugins bundle slot、Memory Dashboard 注册和渲染
 - 配置行为：setup/diagnose 会补齐面板管理的 mnemosyne 默认值；面板从扁平 `config.yaml` 读取实际值，空值以 placeholder 显示默认值；保存后执行 config reload，支持恢复默认配置
 - 面板行为：状态卡和插件卡默认展开，其余配置卡默认折叠；测试连接成功后立即重新执行 diagnose 并刷新 stats
 - CLI 契约实测：`store`→`Stored: <16hex>`；`recall` 命中含 `ID:/Content:/Score:`、未命中仅 `Results for:`；`delete` 有效→`Deleted:`、缺失→reject `Memory not found`；`stats`→计数行；`sleep`→`Consolidation complete`
